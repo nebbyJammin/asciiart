@@ -14,35 +14,54 @@ const (
 	ansiBytesPerPixel 					= 2 // reserve an extra 2 bytes per pixel to allow room for ANSI escape sequences
 )
 
-const (
-	ansi_reset			ANSIEnumVal	= iota
-	ansi_fg_black
-	ansi_fg_green
-	ansi_fg_yellow
-	ansi_fg_blue
-	ansi_fg_magenta
-	ansi_fg_cyan
-	ansi_fg_white
-	ansi_fg_bright_black
-	ansi_fg_bright_red
-	ansi_fg_bright_green
-	ansi_fg_bright_yellow
-	ansi_fg
-)
+// const (
+	// ansi_reset			ANSIEnumVal	= iota
+	// ansi_fg_black
+	// ansi_fg_green
+	// ansi_fg_yellow
+	// ansi_fg_blue
+	// ansi_fg_magenta
+	// ansi_fg_cyan
+	// ansi_fg_white
+	// ansi_fg_bright_black
+	// ansi_fg_bright_red
+	// ansi_fg_bright_green
+	// ansi_fg_bright_yellow
+	// ansi_fg
+// )
+//
+// var (
+	// ansi_esc_codes = [...]string{
+		// "\x1b[0m",
+		// "\x1b[31m",
+		// "\x1b[32m",
+	// }
+// )
+//
+// type ANSIEnumVal int
+//
+// type ANSIEnum struct { }
+//
+// func (a ANSIEnum) ANSI_RESET() ANSIEnumVal { return ansi_reset }
 
-var (
-	ansi_esc_codes = [...]string{
-		"\x1b[0m",
-		"\x1b[31m",
-		"\x1b[32m",
-	}
-)
+type ColorMapper3BitOptions struct {
+	BlackLumUpperThreshold int
+	WhiteLumLowerThreshold int
+	ColorMapperOptions
+}
 
-type ANSIEnumVal int
+type ColorMapper4BitOptions struct {
+	ColorMapperOptions
+}
 
-type ANSIEnum struct { }
+type ColorMapper8BitOptions struct{
+	ColorMapperOptions
+}
 
-func (a ANSIEnum) ANSI_RESET() ANSIEnumVal { return ansi_reset }
+type ColorMapperOptions struct {
+	ColorAdd	[3]int
+	ColorScale	[3]float64
+}
 
 type asciiconverter struct {
 	/* 
@@ -286,21 +305,13 @@ func WithEdgeMapperFactory(
 	}
 }
 
-func WithColorMapperFactory(
-	greyscaleLumThreshold int,
-	colorMapFactory func(int) func(color.Color, int) string,
+func WithColorMapper(
+	colorMapper func(color.Color, int) string,
 ) asciioption {
 	return func(a *asciiconverter) {
-		a.ANSIColorMapper = colorMapFactory(greyscaleLumThreshold)
+		a.ANSIColorMapper = colorMapper
 	}
 }
-
-func With3BitColorMapperFactory() asciioption {
-	return func(a *asciiconverter) {
-		a.ANSIColorMapper = default3BitColorMapper
-	}
-}
-
 
 func defaultLuminenceMapperFactory(aspect_ratio float64) func(luminosityProvider, int) rune {
 	return func(lumProv luminosityProvider, idx int) rune {
@@ -316,16 +327,21 @@ func defaultEdgeMapperFactory(aspect_ratio float64) func(sobelProvider, int) run
 	}
 }
 
-func default3BitColorMapper(c color.Color, lum int) string {
-	return ""
+func With3BitColorMapper(opts ColorMapper3BitOptions) asciioption {
+	return func(a *asciiconverter) {
+		a.ANSIColorMapper = default3BitColorMapperFactory(opts)
+	}
 }
 
-func defaultColorMapperFactor(greyscaleLumThreshold int) func(color.Color, int) string {
-	return func(c color.Color, lum int) string {
-		if lum <= greyscaleLumThreshold {
-			return ""
-		}
-		return ""
+func With4BitColorMapper(opts ColorMapper4BitOptions) asciioption {
+	return func(a *asciiconverter) {
+		a.ANSIColorMapper = default4BitColorMapperFactory(opts)
+	}
+}
+
+func With8BitColorMapper(opts ColorMapper8BitOptions) asciioption {
+	return func(a *asciiconverter) {
+		a.ANSIColorMapper = default8BitColorMapperFactory(opts)
 	}
 }
 
