@@ -14,36 +14,6 @@ const (
 	ansiBytesPerPixel 					= 2 // reserve an extra 2 bytes per pixel to allow room for ANSI escape sequences
 )
 
-// const (
-	// ansi_reset			ANSIEnumVal	= iota
-	// ansi_fg_black
-	// ansi_fg_green
-	// ansi_fg_yellow
-	// ansi_fg_blue
-	// ansi_fg_magenta
-	// ansi_fg_cyan
-	// ansi_fg_white
-	// ansi_fg_bright_black
-	// ansi_fg_bright_red
-	// ansi_fg_bright_green
-	// ansi_fg_bright_yellow
-	// ansi_fg
-// )
-//
-// var (
-	// ansi_esc_codes = [...]string{
-		// "\x1b[0m",
-		// "\x1b[31m",
-		// "\x1b[32m",
-	// }
-// )
-//
-// type ANSIEnumVal int
-//
-// type ANSIEnum struct { }
-//
-// func (a ANSIEnum) ANSI_RESET() ANSIEnumVal { return ansi_reset }
-
 type ColorMapper3BitOptions struct {
 	BlackLumUpperThreshold int
 	WhiteLumLowerThreshold int
@@ -71,14 +41,14 @@ type asciiconverter struct {
 	Any downscale factor < 1 will be interpreted (and potentially updated) to 1. This is because upscaling is not allowed.
 	*/
 	DownscaleFactor				float64
-	// EdgeThreshold provides the gMag2 value threshold before an edge is registered as an edge. This field only has an effect if UseSobel is true.
-	EdgeThreshold				float64
+	// SobelMagnitudeThreshold provides the gMag2 value threshold before an edge is registered as an edge. This field only has an effect if UseSobel is true.
+	SobelMagnitudeThreshold				float64
 	// OutputAspectRatio is the aspect ratio of the resulting image (char_x / char_y).
 	// In most cases, a terminal character's height is twice its width. 
 	// So the resulting image must be 2:1 ratio to compensate for the taller height
 	OutputAspectRatio 			float64
-	// IgnoreAspectRatio will ignore aspect ratio and forceably downscale the targetWidth, targetHeight. It is recommended to set this to false, and just configure the AspectRatio normally (default=2, and in most cases, it will work fine)
-	IgnoreAspectRatio			bool
+	// AlwaysDownscaleToTarget will ignore aspect ratio and forceably downscale the targetWidth, targetHeight. It is recommended to set this to false, and just configure the AspectRatio normally (default=2, and in most cases, it will work fine)
+	AlwaysDownscaleToTarget			bool
 	// UseSobel flags to the converter whether or not sobel edge detection should be used.
 	UseSobel					bool
 	// UseColor flags to the converter whether terminal escape sequences used to indicate colour should be used
@@ -232,14 +202,22 @@ NewDefault initialises an asciiart instance with default parameters.
 */
 func NewDefault() *asciiconverter {
 	return &asciiconverter {
-		DownscaleFactor: 0,
-		EdgeThreshold: 1,
+		DownscaleFactor: 1,
+		SobelMagnitudeThreshold: 30000,
 		OutputAspectRatio: 2,
-		IgnoreAspectRatio: false,
+		AlwaysDownscaleToTarget: false, // TODO: Change this to an enum, 0: Use downscale factor, 1: Downscale to target wrt aspect ratio, 2: Downscale to target irrespective of aspect ratio
 		UseColor: true,
 		UseSobel: true,
 		LuminenceMapperFactory: defaultLuminenceMapperFactory,
 		EdgeMapperFactory: defaultEdgeMapperFactory,
+		ANSIColorMapper: default4BitColorMapperFactory(
+			ColorMapper4BitOptions{
+				ColorMapperOptions: ColorMapperOptions{
+					ColorAdd: [3]int{50, 50, 50},
+					ColorScale: [3]float64{1.1, 1.1, 1.1},
+				},
+			},
+		),
 	}
 }
 
@@ -261,7 +239,7 @@ func WithDownscaleFactor(factor float64) asciioption {
 
 func WithEdgeStrength(strength float64) asciioption {
 	return func(a *asciiconverter) {
-		a.EdgeThreshold = strength
+		a.SobelMagnitudeThreshold = strength
 	}
 }
 
@@ -271,9 +249,9 @@ func WithAspectRatio(ratio float64) asciioption {
 	}
 }
 
-func WithIgnoreAspectRatio(ignore bool) asciioption {
+func WithAlwaysDownscaleToTarget(ignore bool) asciioption {
 	return func(a *asciiconverter) {
-		a.IgnoreAspectRatio = ignore
+		a.AlwaysDownscaleToTarget = ignore
 	}
 }
 
@@ -382,9 +360,8 @@ func (a *asciiconverter) DownscaleImage(src image.Image, targetWidth, targetHeig
 	srcBounds := src.Bounds()
 	srcWidth, srcHeight := srcBounds.Dx(), srcBounds.Dy()
 
-	// DownscaleFactor < 1 indicates that the src image be forcibly resized to the targetWidth
 	// NOTE: We will never upscale width or height. Instead, downscale the opposing axis.
-	if a.IgnoreAspectRatio {
+	if a.AlwaysDownscaleToTarget {
 		if a.OutputAspectRatio >= 1 {
 			// aspect ratio >= 1, so downscale directly to the width, then scale height accordingly
 			newWidth = targetWidth
@@ -543,7 +520,7 @@ func (a *asciiconverter) ApplySobel(lumImg luminosityProvider) defaultSobelProvi
 }
 
 func (a *asciiconverter) ASCIIGenWithSobel(sobelProv sobelProvider, aspect_ratio float64) string {
-	adjustedGMag2Threshold := a.EdgeThreshold * (aspect_ratio * aspect_ratio)
+	adjustedGMag2Threshold := a.SobelMagnitudeThreshold * (aspect_ratio * aspect_ratio)
 
 	width, height := sobelProv.Width(), sobelProv.Height()
 	numPixels := width * height
