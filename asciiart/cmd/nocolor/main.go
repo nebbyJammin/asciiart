@@ -10,7 +10,7 @@ import (
 func main() {
 	ascii := asciiart.New(
 		// asciiart.WithAlwaysDownscaleToTarget(true), // Downscaling before to target size
-		asciiart.WithSobel(false), // Not using sobel
+		asciiart.WithSobel(true), // Not using sobel
 		asciiart.WithColor(false), // Not using color
 	)
 
@@ -19,3 +19,5 @@ func main() {
 		fmt.Println(err)
 	}
 }
+
+

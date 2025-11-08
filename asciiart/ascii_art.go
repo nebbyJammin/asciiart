@@ -1,6 +1,7 @@
 package asciiart
 
 import (
+	"fmt"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
@@ -37,7 +38,7 @@ type ColorMapperOptions struct {
 	ColorScale	[3]float64
 }
 
-type asciiconverter struct {
+type AsciiConverter struct {
 	/* 
 	DownscaleFactor is the scale factor at which the image is downsampled using nearest neighbour sampling
 	without going below targetWidth and targetHeight when calling Convert().
@@ -64,7 +65,7 @@ type asciiconverter struct {
 	ANSIColorMapper				func(color.Color, int) string
 }
 
-type asciioption func(*asciiconverter)
+type asciioption func(*AsciiConverter)
 
 type defaultLuminosityProvider struct {
 	image.Image
@@ -194,6 +195,7 @@ type sobelProvider interface {
 	SobelMag2At(int, int) int
 }
 
+//TODO: Update the docs
 /*
 NewDefault initialises an asciiart instance with default parameters.
 
@@ -204,8 +206,8 @@ NewDefault initialises an asciiart instance with default parameters.
 	- DefaultLuminenceToCharMapping
 
 */
-func NewDefault() *asciiconverter {
-	return &asciiconverter {
+func NewDefault() *AsciiConverter {
+	return &AsciiConverter {
 		DownscaleFactor: 1, // TODO: remove this
 		SobelMagnitudeThreshold: 30000,
 		OutputAspectRatio: 2,
@@ -225,7 +227,7 @@ func NewDefault() *asciiconverter {
 	}
 }
 
-func New(opts ...asciioption) *asciiconverter {
+func New(opts ...asciioption) *AsciiConverter {
 	ascii := NewDefault()
 
 	for _, o := range opts {
@@ -236,63 +238,91 @@ func New(opts ...asciioption) *asciiconverter {
 }
 
 func WithDownscaleFactor(factor float64) asciioption {
-	return func(a *asciiconverter) {
+	return func(a *AsciiConverter) {
 		a.DownscaleFactor = factor
 	}
 }
 
 func WithEdgeStrength(strength float64) asciioption {
-	return func(a *asciiconverter) {
+	return func(a *AsciiConverter) {
 		a.SobelMagnitudeThreshold = strength
 	}
 }
 
 func WithAspectRatio(ratio float64) asciioption {
-	return func(a *asciiconverter) {
+	return func(a *AsciiConverter) {
 		a.OutputAspectRatio = ratio
 	}
 }
 
 func WithAlwaysDownscaleToTarget(ignore bool) asciioption {
-	return func(a *asciiconverter) {
+	return func(a *AsciiConverter) {
 		a.AlwaysDownscaleToTarget = ignore
 	}
 }
 
 func WithSobel(useSobel bool) asciioption {
-	return func(a *asciiconverter) {
+	return func(a *AsciiConverter) {
 		a.UseSobel = useSobel
 	}
 }
 
 func WithColor(useColor bool) asciioption {
-	return func(a *asciiconverter) {
+	return func(a *AsciiConverter) {
 		a.UseColor = useColor
 	}
 }
 
+		// ANSIColorMapper: default4BitColorMapperFactory(
+			// ColorMapper4BitOptions{
+				// ColorMapperOptions: ColorMapperOptions{
+					// ColorAdd: [3]int{50, 50, 50},
+					// ColorScale: [3]float64{1.1, 1.1, 1.1},
+				// },
+			// },
+		// ),
+
 func WithLuminenceMapper(
 	lumMapper func(lumProv luminosityProvider, x, y int) rune,
 ) asciioption {
-	return func(a *asciiconverter) {
+	return func(a *AsciiConverter) {
 		a.LuminenceMapper = lumMapper
 	}
+}
+
+func WithDefaultLuminenceMapper() asciioption {
+	return WithLuminenceMapper(defaultLuminenceMapper)
 }
 
 func WithEdgeMapperFactory(
 	edgeMapFactory func(aspect_ratio float64) func(sobelProv sobelProvider, x, y int) rune,
 ) asciioption {
-	return func(a *asciiconverter) {
+	return func(a *AsciiConverter) {
 		a.EdgeMapperFactory = edgeMapFactory
 	}
+}
+
+func WithDefaultEdgeMapperFactory() asciioption {
+	return WithEdgeMapperFactory(defaultEdgeMapperFactory)
 }
 
 func WithColorMapper(
 	colorMapper func(color.Color, int) string,
 ) asciioption {
-	return func(a *asciiconverter) {
+	return func(a *AsciiConverter) {
 		a.ANSIColorMapper = colorMapper
 	}
+}
+
+func WithDefaultColorMapper() asciioption {
+	opts := ColorMapper4BitOptions {
+				ColorMapperOptions: ColorMapperOptions {
+					ColorAdd: [3]int{50, 50, 50},
+					ColorScale: [3]float64{1.1, 1.1, 1.1},
+				},
+			}
+
+	return WithColorMapper(default4BitColorMapperFactory(opts))
 }
 
 // func defaultLuminenceMapperFactory() func(luminosityProvider, int) rune {
@@ -312,29 +342,29 @@ func defaultLuminenceMapper(lumProv luminosityProvider, x, y int) rune {
 func defaultEdgeMapperFactory(aspect_ratio float64) func(sobelProvider, int, int) rune {
 	return func(sobelProv sobelProvider, x, y int) rune {
 
-		return ' '
+		return '□'
 	}
 }
 
 func With3BitColorMapper(opts ColorMapper3BitOptions) asciioption {
-	return func(a *asciiconverter) {
+	return func(a *AsciiConverter) {
 		a.ANSIColorMapper = default3BitColorMapperFactory(opts)
 	}
 }
 
 func With4BitColorMapper(opts ColorMapper4BitOptions) asciioption {
-	return func(a *asciiconverter) {
+	return func(a *AsciiConverter) {
 		a.ANSIColorMapper = default4BitColorMapperFactory(opts)
 	}
 }
 
 func With8BitColorMapper(opts ColorMapper8BitOptions) asciioption {
-	return func(a *asciiconverter) {
+	return func(a *AsciiConverter) {
 		a.ANSIColorMapper = default8BitColorMapperFactory(opts)
 	}
 }
 
-func (a *asciiconverter) ConvertReader(r io.Reader, targetWidth, targetHeight int) (string, error) {
+func (a *AsciiConverter) ConvertReader(r io.Reader, targetWidth, targetHeight int) (string, error) {
 	img, _, err := image.Decode(r)
 	if err != nil {
 		return "", err
@@ -343,7 +373,7 @@ func (a *asciiconverter) ConvertReader(r io.Reader, targetWidth, targetHeight in
 	return a.Convert(img, targetWidth, targetHeight), nil
 }
 
-func (a *asciiconverter) ConvertBytes(b []byte, targetWidth, targetHeight int) (string, error) {
+func (a *AsciiConverter) ConvertBytes(b []byte, targetWidth, targetHeight int) (string, error) {
 	return a.ConvertReader(bytes.NewReader(b), targetWidth, targetHeight)
 }
 
@@ -357,7 +387,7 @@ If DownscaleFactor < 1, then the function will set the value to 1 (<0 values not
 
 Returns the downscaled image, and the effective aspect ratio. The effective aspect ratio is approximately equal to the original aspect ratio, but may differ because of integer clamping. Use the effective aspect ratio to adjust Sobel thresholds or gradient correction, since the sampling grid may differ slightly from OutputAspectRatio due to integer rounding.
 */
-func (a *asciiconverter) DownscaleImage(src image.Image, targetWidth, targetHeight int) (image.Image, float64) {
+func (a *AsciiConverter) DownscaleImage(src image.Image, targetWidth, targetHeight int) (image.Image, float64) {
 	if a.DownscaleFactor < 1 {
 		a.DownscaleFactor = 1
 	}
@@ -424,7 +454,7 @@ func (a *asciiconverter) DownscaleImage(src image.Image, targetWidth, targetHeig
 	return downscaledImg, float64(newWidth) / float64(newHeight)
 }
 
-func (a *asciiconverter) MapLuminosity(img image.Image) defaultLuminosityProvider {
+func (a *AsciiConverter) MapLuminosity(img image.Image) defaultLuminosityProvider {
 	lumImg := makeDefaultLuminosityImage(img)
 	
 	bounds := img.Bounds()
@@ -501,7 +531,7 @@ func applySobelPixelSafely(lumImg luminosityProvider, gGrad []float64, gMag2 []i
 	gGrad[idx] = computeGrad(float64(cur_gx), float64(cur_gy))
 }
 
-func (a *asciiconverter) ApplySobel(lumImg luminosityProvider) defaultSobelProvider {	
+func (a *AsciiConverter) ApplySobel(lumImg luminosityProvider) defaultSobelProvider {	
 	gWidth := lumImg.Width()
 	gHeight := lumImg.Height()
 
@@ -531,8 +561,10 @@ func (a *asciiconverter) ApplySobel(lumImg luminosityProvider) defaultSobelProvi
 	return makeDefaultSobelProvider(lumImg, gGrad, gMag2)
 }
 
-func (a *asciiconverter) ASCIIGenWithSobel(sobelProv sobelProvider, aspect_ratio float64) string {
+func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv sobelProvider, aspect_ratio float64) string {
 	adjustedGMag2Threshold := a.SobelMagnitudeThreshold * (aspect_ratio * aspect_ratio)
+	fmt.Println("Mag2", a.SobelMagnitudeThreshold)
+	fmt.Println("Adjusted Mag2", adjustedGMag2Threshold)
 
 	width, height := sobelProv.Width(), sobelProv.Height()
 	// numPixels := width * height
@@ -553,18 +585,19 @@ func (a *asciiconverter) ASCIIGenWithSobel(sobelProv sobelProvider, aspect_ratio
 	for y := range height {
 		for x := range width {
 			currMag2 := sobelProv.SobelMag2At(x, y)
-			if currMag2 >= int(adjustedGMag2Threshold) {
+			if currMag2 < int(adjustedGMag2Threshold) {
 				asciiBuilder.WriteRune(a.LuminenceMapper(sobelProv, x, y))
 			} else {
 				asciiBuilder.WriteRune(edgeMapper(sobelProv, x, y))
 			}
 		}
+		asciiBuilder.WriteRune('\n')
 	}
 	
 	return asciiBuilder.String()
 }
 
-func (a *asciiconverter) ASCIIGen(lumProv luminosityProvider, aspect_ratio float64) string {
+func (a *AsciiConverter) ASCIIGen(lumProv luminosityProvider, aspect_ratio float64) string {
 	width, height := lumProv.Width(), lumProv.Height()
 	// numPixels := width * height
 
@@ -590,7 +623,7 @@ func (a *asciiconverter) ASCIIGen(lumProv luminosityProvider, aspect_ratio float
 	return asciiBuilder.String()
 }
 
-func (a *asciiconverter) Convert(img image.Image, targetWidth, targetHeight int) string {
+func (a *AsciiConverter) Convert(img image.Image, targetWidth, targetHeight int) string {
 	var effectiveAspectRatio float64
 	img, effectiveAspectRatio = a.DownscaleImage(img, targetWidth, targetHeight)
 	lumImg := a.MapLuminosity(img)
