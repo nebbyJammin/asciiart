@@ -1,41 +1,61 @@
 package asciiart
 
 import (
-	"fmt"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
 
 	"bytes"
 	"image"
-	"image/color"
 	"io"
 	"math"
 	"strings"
 )
 
 const (
-	bytesPerPixel						= 3.5 // assume avg 3.5 bytes per pixel
-	ansiBytesPerPixel 					= 2 // reserve an extra 2 bytes per pixel to allow room for ANSI escape sequences
+	bytesPerCharReserve						= 3.5 // assume avg 3.5 bytes per pixel
+	ansiAdditionalBytesReserved3Bit 					= 2 // reserve an extra 2 bytes per pixel to allow room for ANSI escape sequences
+
+	ansiAdditionalBytesReserved4Bit 					= 5 // reserve an extra 5 bytes per pixel to allow room for ANSI escape sequences
+	ansiAdditionalBytesReserved8Bit						= 8 // reserve an extra 8 bytes per pixel to allow room for ANSI escape sequences
+	ansiAdditionalBytesReserved24Bit					= 16 // reserve an extra 16 bytes per pixel to allow room for ANSI escape sequences
 )
 
 type ColorMapper3BitOptions struct {
-	BlackLumUpperThreshold int
-	WhiteLumLowerThreshold int
-	ColorMapperOptions
+	// ColorThresholds specifies the minimum value for each channel [r, g, b] required to register as that colour.
+	ColorThresholds	[3]int
+	DoReward		bool
+	// ColorRewards adds additional value for the 1st, 2nd, 3rd strongest channels if the maximum delta between any two channels is bigger than ColorRewardMinRange.
+	ColorRewards	[3]int
+	DefaultReward	int
+	// ColorRewardMinRange is the lower threshold for which ColorRewards is applied if the maximum delta between any two channels is bigger than this value.
+	ColorRewardMinRange int
+	DoBlackThreshold bool
+	DoWhiteThreshold bool
+	// BlackLumUpper is the upper bound (inclusive) for luminosity, for which pixels are rendered as black
+	BlackLumUpper	int
+	// WhiteLumLower is the lower bound (inclusive) for luminosity, for which pixels are rendered as white
+	WhiteLumLower	int
 }
 
 type ColorMapper4BitOptions struct {
-	ColorMapperOptions
+	ColorMapper3BitOptions
+	// BoldColoredLumLower is the lower bound (inclusive) for luminosity, for which colored codes will become its bold variant
+	BoldColoredLumLower	int
+	// BoldBlackLumLower is the lower bound (inclusive) for luminosity, for which the black code (30) will become the bold version (90)
+	BoldBlackLumLower 	int
+	BoldWhiteLumLower 	int
 }
 
-type ColorMapper8BitOptions struct{
-	ColorMapperOptions
+type ColorMapper8BitOptions struct {
+	rStep				[3]int
+	gStep				[3]int
+	bStep				[3]int
+	greyStep			[3]int
 }
 
-type ColorMapperOptions struct {
-	ColorAdd	[3]int
-	ColorScale	[3]float64
+type ColorMapper24BitOptions struct {
+
 }
 
 type AsciiConverter struct {
@@ -48,6 +68,10 @@ type AsciiConverter struct {
 	DownscaleFactor				float64
 	// SobelMagnitudeThreshold provides the gMag2 value threshold before an edge is registered as an edge. This field only has an effect if UseSobel is true.
 	SobelMagnitudeThreshold				float64
+	
+	// LaplacianMagnitudeThreshold provides the maximum laplacian value for an edge to be considered an edge.
+	LaplacianMagnitudeThreshold			int
+
 	// OutputAspectRatio is the aspect ratio of the resulting image (char_x / char_y).
 	// In most cases, a terminal character's height is twice its width. 
 	// So the resulting image must be 2:1 ratio to compensate for the taller height
@@ -59,10 +83,15 @@ type AsciiConverter struct {
 	// UseColor flags to the converter whether terminal escape sequences used to indicate colour should be used
 	UseColor					bool
 	// The function that converts a luminence value (0-255) to a rune
-	LuminenceMapper				func(lumProv luminosityProvider, x, y int) rune
+	LuminenceMapper				func(lumProv LuminosityProvider, x, y int) rune
 	// The function that converts an approximate gradient to a rune
-	EdgeMapperFactory			func(aspect_ratio float64) func(sobelProv sobelProvider, x, y int) rune
-	ANSIColorMapper				func(color.Color, int) string
+	EdgeMapperFactory			func(aspect_ratio float64) func(sobelProv SobelProvider, x, y int) rune
+	ANSIColorMapper				func(lumProv LuminosityProvider, x, y int) (code_id int, fmted_code string)
+
+	// BytesPerCharToReserve is the amount of bytes per character to reserve in the result buffer
+	BytesPerCharToReserve		float64
+	// AdditionalBytesPerCharColor is the amount of additional bytes per character to reserve in the result buffer if color is being used
+	AdditionalBytesPerCharColor float64
 }
 
 type asciioption func(*AsciiConverter)
@@ -136,16 +165,18 @@ func (d defaultLuminosityProvider) Height() int {
 }
 
 type defaultSobelProvider struct {
-	luminosityProvider
+	LuminosityProvider
 	G_Grad		[]float64
 	G_Mag2		[]int
+	G_Laplacian	[]int
 }
 
-func makeDefaultSobelProvider(lumProvider luminosityProvider, gGrad []float64, gMag2 []int) defaultSobelProvider {
+func makeDefaultSobelProvider(lumProvider LuminosityProvider, gGrad []float64, gMag2 []int, gLap []int) defaultSobelProvider {
 	return defaultSobelProvider{
-		luminosityProvider: lumProvider,
+		LuminosityProvider: lumProvider,
 		G_Grad: gGrad,
 		G_Mag2: gMag2,
+		G_Laplacian: gLap,
 	}
 }
 
@@ -165,6 +196,14 @@ func (d defaultSobelProvider) SobelMag2At1D(idx int) int {
 	return d.G_Mag2[idx]
 }
 
+func (d defaultSobelProvider) SobelLaplacianAt(x, y int) int {
+	return d.G_Laplacian[x + y * d.Width()]
+}
+
+func (d defaultSobelProvider) SobelLaplacianAt1D(idx int) int {
+	return d.G_Laplacian[idx]
+}
+
 /*
 SobelMag2At returns the sobel magnitude squared at some x, y pixel. However, if you need 1D iteration, use x as the iterating variable, and set y = 0. The SobelMag2At() function does not check if x and y are actually valid. Essentially under the hood it is doing:
 
@@ -174,7 +213,7 @@ func (d defaultSobelProvider) SobelMag2At(x, y int) int {
 	return d.G_Mag2[x + y * d.Width()]
 }
 
-type luminosityProvider interface {
+type LuminosityProvider interface {
 	image.Image
 	LuminosityAt1D(int) int
 	LuminosityAt(int, int) int
@@ -185,14 +224,16 @@ type luminosityProvider interface {
 	Height() int
 }
 
-type sobelProvider interface {
+type SobelProvider interface {
 	image.Image
-	luminosityProvider
+	LuminosityProvider
 	SobelEdgeDetected(int, int, int) bool
 	SobelGradAt1D(int) float64
 	SobelGradAt(int, int) float64
 	SobelMag2At1D(int) int
 	SobelMag2At(int, int) int
+	SobelLaplacianAt(int, int) int
+	SobelLaplacianAt1D(int) int
 }
 
 //TODO: Update the docs
@@ -209,21 +250,17 @@ NewDefault initialises an asciiart instance with default parameters.
 func NewDefault() *AsciiConverter {
 	return &AsciiConverter {
 		DownscaleFactor: 1, // TODO: remove this
-		SobelMagnitudeThreshold: 30000,
+		SobelMagnitudeThreshold: 100000,
 		OutputAspectRatio: 2,
 		AlwaysDownscaleToTarget: true, // TODO: Change this to an enum, 0: Use downscale factor, 1: Downscale to target wrt aspect ratio, 2: Downscale to target irrespective of aspect ratio
 		UseColor: true,
 		UseSobel: true,
 		LuminenceMapper: defaultLuminenceMapper,
 		EdgeMapperFactory: defaultEdgeMapperFactory,
-		ANSIColorMapper: default4BitColorMapperFactory(
-			ColorMapper4BitOptions{
-				ColorMapperOptions: ColorMapperOptions{
-					ColorAdd: [3]int{50, 50, 50},
-					ColorScale: [3]float64{1.1, 1.1, 1.1},
-				},
-			},
-		),
+		// ANSIColorMapper: defaultColorMapper(),
+		ANSIColorMapper: Default4BitColorMapper(),
+		BytesPerCharToReserve: bytesPerCharReserve,
+		AdditionalBytesPerCharColor: ansiAdditionalBytesReserved3Bit,
 	}
 }
 
@@ -283,7 +320,7 @@ func WithColor(useColor bool) asciioption {
 		// ),
 
 func WithLuminenceMapper(
-	lumMapper func(lumProv luminosityProvider, x, y int) rune,
+	lumMapper func(lumProv LuminosityProvider, x, y int) rune,
 ) asciioption {
 	return func(a *AsciiConverter) {
 		a.LuminenceMapper = lumMapper
@@ -295,7 +332,7 @@ func WithDefaultLuminenceMapper() asciioption {
 }
 
 func WithEdgeMapperFactory(
-	edgeMapFactory func(aspect_ratio float64) func(sobelProv sobelProvider, x, y int) rune,
+	edgeMapFactory func(aspect_ratio float64) func(sobelProv SobelProvider, x, y int) rune,
 ) asciioption {
 	return func(a *AsciiConverter) {
 		a.EdgeMapperFactory = edgeMapFactory
@@ -307,29 +344,102 @@ func WithDefaultEdgeMapperFactory() asciioption {
 }
 
 func WithColorMapper(
-	colorMapper func(color.Color, int) string,
+	colorMapper func(lumProv LuminosityProvider, x int, y int) (int, string),
 ) asciioption {
 	return func(a *AsciiConverter) {
 		a.ANSIColorMapper = colorMapper
 	}
 }
 
-func WithDefaultColorMapper() asciioption {
-	opts := ColorMapper4BitOptions {
-				ColorMapperOptions: ColorMapperOptions {
-					ColorAdd: [3]int{50, 50, 50},
-					ColorScale: [3]float64{1.1, 1.1, 1.1},
-				},
-			}
+func defaultColorMapper() func(LuminosityProvider, int, int) (int, string) {
+	return Default3BitColorMapper()
+}
 
-	return WithColorMapper(default4BitColorMapperFactory(opts))
+var default3BitOpts = ColorMapper3BitOptions {
+	// ColorThresholds: [3]int{130, 140, 120},
+	// ColorThresholds: [3]int{110, 120, 80},
+	ColorThresholds: [3]int{140, 150, 110},
+	DoReward: true,
+	ColorRewards: [3]int{40, 20, 10},
+	DefaultReward: 24,
+	ColorRewardMinRange: 20,
+	DoBlackThreshold: true,
+	BlackLumUpper: 50,
+	DoWhiteThreshold: true,
+	WhiteLumLower: 200,
+}
+
+func Default3BitColorMapper() func(LuminosityProvider, int, int) (int, string) {
+	return default3BitColorMapperFactory(default3BitOpts)
+}
+
+func Default4BitColorMapper() func(LuminosityProvider, int, int) (int, string) {
+	opts := ColorMapper4BitOptions {
+		ColorMapper3BitOptions: default3BitOpts,
+		BoldColoredLumLower: 100,
+		BoldBlackLumLower: 40,
+		BoldWhiteLumLower: 240,
+	}
+
+	return default4BitColorMapperFactory(opts)
+}
+
+func Default8BitColorMapper() func(LuminosityProvider, int, int) (int, string) {
+	opts := ColorMapper8BitOptions {
+		rStep: [3]int{0, 95, 40},
+		gStep: [3]int{0, 95, 40},
+		bStep: [3]int{0, 95, 40},
+		greyStep: [3]int{8, 18, 10},
+	}
+
+	return default8BitColorMapperFactory(opts)
+}
+
+func Default24BitColorMapper() func(LuminosityProvider, int, int) (int, string) {
+	return default24BitColorMapperFactory()
+}
+
+func WithDefaultColorMapper() asciioption {
+	return WithColorMapper(defaultColorMapper())
+}
+
+func WithDefault3BitColorMapper() asciioption {
+	return func(a *AsciiConverter) {
+		a.ANSIColorMapper = Default3BitColorMapper()
+		a.BytesPerCharToReserve = bytesPerCharReserve
+		a.AdditionalBytesPerCharColor = ansiAdditionalBytesReserved3Bit
+	}
+}
+
+func WithDefault4BitColorMapper() asciioption {
+	return func(a *AsciiConverter) {
+		a.ANSIColorMapper = Default4BitColorMapper()
+		a.BytesPerCharToReserve = bytesPerCharReserve
+		a.AdditionalBytesPerCharColor = ansiAdditionalBytesReserved4Bit
+	}
+}
+
+func WithDefault8BitColorMapper() asciioption {
+	return func(a *AsciiConverter) {
+		a.ANSIColorMapper = Default8BitColorMapper()
+		a.BytesPerCharToReserve = bytesPerCharReserve
+		a.AdditionalBytesPerCharColor = ansiAdditionalBytesReserved8Bit
+	}
+}
+
+func WithDefault24BitColorMapper() asciioption {
+	return func(a *AsciiConverter) {
+		a.ANSIColorMapper = Default24BitColorMapper()
+		a.BytesPerCharToReserve = bytesPerCharReserve
+		a.AdditionalBytesPerCharColor = ansiAdditionalBytesReserved24Bit
+	}
 }
 
 // func defaultLuminenceMapperFactory() func(luminosityProvider, int) rune {
 	// return defaultLuminenceMapper
 // }
 
-func defaultLuminenceMapper(lumProv luminosityProvider, x, y int) rune {
+func defaultLuminenceMapper(lumProv LuminosityProvider, x, y int) rune {
 	const charRamp = `$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\|()1{}[]?-_+~<>i!lI;:,"^` + "`" + `'. `
 	const charLen = float64(len(charRamp))
 
@@ -339,28 +449,91 @@ func defaultLuminenceMapper(lumProv luminosityProvider, x, y int) rune {
 	return rune(charRamp[charIdx])
 }
 
-func defaultEdgeMapperFactory(aspect_ratio float64) func(sobelProvider, int, int) rune {
-	return func(sobelProv sobelProvider, x, y int) rune {
+func defaultEdgeMapperFactory(aspect_ratio float64) func(SobelProvider, int, int) rune {
+	type edgeGlyphStop struct {
+		rune
+		float64
+	}
 
-		return '□'
+	const minGrad = float64(-60.5)
+	const maxGrad = float64(60.5)
+
+	stops := [...]edgeGlyphStop{
+		{rune: '-', float64: math.Nextafter(-60, math.Inf(-1))},		// (-inf, -7)
+		{rune: 'l', float64: math.Nextafter(-40, math.Inf(-1))},		// [-7, -5)
+		{rune: 'L', float64: math.Nextafter(-30, math.Inf(-1))},		// [-5, -3)
+		{rune: '\\', float64: math.Nextafter(-3, math.Inf(-1))},	// [-3, -0.5)
+		{rune: '|', float64: 3},									// [-0.5, 0.5]
+		{rune: '/', float64: math.Nextafter(30, math.Inf(1))},		// (0.5, 3]
+		{rune: 'J', float64: math.Nextafter(40, math.Inf(1))},		// (3, 5]
+		{rune: 'j', float64: math.Nextafter(60, math.Inf(1))},		// (5, 7]
+		{rune: '-', float64: math.Inf(1)},							// (7, inf)
+	}
+
+	const precision = float64(10)
+
+	glyphStopsLen := int((maxGrad - minGrad) * precision / aspect_ratio) // Aspect ratio of 2 will half the gradients
+	glyphStops := make([]rune, glyphStopsLen)
+
+	idxOffset := int(minGrad * precision / aspect_ratio) // The amount we have to shift the idx to get the gradient
+	currStop := 0
+	// count := 0
+	for i := range glyphStops {
+		thresh := stops[currStop].float64 * precision / aspect_ratio
+		for float64(i + idxOffset) > thresh {
+			// fmt.Println("Got", count, stops[currStop].rune)
+			// count = 0
+
+			// fmt.Println("skipping", string(stops[currStop].rune), "with inferred grad", float64(i - idxOffset), "comparing with expected", stops[currStop].float64)
+
+			currStop++
+			thresh = stops[currStop].float64 * precision / aspect_ratio
+		}
+
+		// count++
+		glyphStops[i] = stops[currStop].rune
+	}
+
+	// fmt.Println(string(glyphStops))
+
+	return func(sobelProv SobelProvider, x, y int) rune {
+		grad := sobelProv.SobelGradAt(x, y)
+		gradIdx := min(glyphStopsLen - 1, max(0, int(grad * precision) - idxOffset))
+		// fmt.Println("Got gradient", grad, (grad * aspect_ratio),  "=", gradIdx, string(glyphStops[gradIdx]))
+		return glyphStops[gradIdx]
 	}
 }
 
-func With3BitColorMapper(opts ColorMapper3BitOptions) asciioption {
+func With3BitColorMapper(opts ColorMapper3BitOptions, bytesPerCharToReserve, colorBytesPerCharToReserve float64) asciioption {
 	return func(a *AsciiConverter) {
+		a.BytesPerCharToReserve = bytesPerCharToReserve
+		a.AdditionalBytesPerCharColor = colorBytesPerCharToReserve
+
 		a.ANSIColorMapper = default3BitColorMapperFactory(opts)
 	}
 }
 
-func With4BitColorMapper(opts ColorMapper4BitOptions) asciioption {
+func With4BitColorMapper(opts ColorMapper4BitOptions, bytesPerCharToReserve, colorBytesPerCharToReserve float64) asciioption {
 	return func(a *AsciiConverter) {
+		a.BytesPerCharToReserve = bytesPerCharToReserve
+		a.AdditionalBytesPerCharColor = colorBytesPerCharToReserve
 		a.ANSIColorMapper = default4BitColorMapperFactory(opts)
 	}
 }
 
-func With8BitColorMapper(opts ColorMapper8BitOptions) asciioption {
+func With8BitColorMapper(opts ColorMapper8BitOptions, bytesPerCharToReserve, colorBytesPerCharToReserve float64) asciioption {
 	return func(a *AsciiConverter) {
+		a.BytesPerCharToReserve = bytesPerCharToReserve
+		a.AdditionalBytesPerCharColor = colorBytesPerCharToReserve
 		a.ANSIColorMapper = default8BitColorMapperFactory(opts)
+	}
+}
+
+func With24BitColorMapper(opts ColorMapper24BitOptions, bytesPerCharToReserve, colorBytesPerCharToReserve float64) asciioption {
+	return func(a *AsciiConverter) {
+		a.BytesPerCharToReserve = bytesPerCharToReserve
+		a.AdditionalBytesPerCharColor = colorBytesPerCharToReserve
+		a.ANSIColorMapper = default24BitColorMapperFactory()
 	}
 }
 
@@ -463,9 +636,9 @@ func (a *AsciiConverter) MapLuminosity(img image.Image) defaultLuminosityProvide
 	for x := range width {
 		for y := range height {
 			r, g, b, a := img.At(x, y).RGBA()
-			r8, g8, b8 := r >> 8, g >> 8, b >> 8
+			r8, g8, b8, a8 := r >> 8, g >> 8, b >> 8, a >> 8
 			// Lum approximation. Also scale the luminosity based on the alpha channel
-			lum := int((r8 * 2126 + g8 * 7152 + b8 * 722) / 10000 * a / 65536)
+			lum := int((r8 * 2126 + g8 * 7152 + b8 * 722) / 10000 * a8 / 255)
 			lumImg.LuminositySet(x, y, lum)
 		}
 	}
@@ -475,21 +648,27 @@ func (a *AsciiConverter) MapLuminosity(img image.Image) defaultLuminosityProvide
 
 func computeGrad(x float64, y float64) float64 {
 	if x == 0 {
-		return math.MaxFloat64
+		if y > 0 {
+			return math.Inf(1)
+		} else {
+			return math.Inf(-1)
+		}
 	} else {
-		return x / y
+		return y / x
 	}
 }
 
-func applySobelCentralPixel(lumImg luminosityProvider, gGrad []float64, gMag2 []int, x, y int) {
-	cur_gx := -1 * lumImg.LuminosityAt(x-1,y-1) +
+func applySobelCentralPixel(lumImg LuminosityProvider, gGrad []float64, gMag2 []int, gLap []int, x, y int) {
+	idx := x + y * lumImg.Width()
+
+	gx := -1 * lumImg.LuminosityAt(x-1,y-1) +
 	+1 * lumImg.LuminosityAt(x+1,y-1) +
 	-2 * lumImg.LuminosityAt(x-1,y) +
 	+2 * lumImg.LuminosityAt(x+1,y) +
 	-1 * lumImg.LuminosityAt(x-1,y+1) +
 	+1 * lumImg.LuminosityAt(x+1,y+1)
 
-	cur_gy := -1 * lumImg.LuminosityAt(x-1,y-1) +
+	gy := -1 * lumImg.LuminosityAt(x-1,y-1) +
 	-2 * lumImg.LuminosityAt(x,y-1) +
 	-1 * lumImg.LuminosityAt(x+1,y-1) +
 	+1 * lumImg.LuminosityAt(x-1,y+1) +
@@ -497,24 +676,31 @@ func applySobelCentralPixel(lumImg luminosityProvider, gGrad []float64, gMag2 []
 	+1 * lumImg.LuminosityAt(x+1,y+1)
 
 	// Normally, we would have to scale the gMag2 to account for the aspect ratio.
-	cur_gMag2 := cur_gx * cur_gx + cur_gy * cur_gy
-	idx := x + y * lumImg.Width()
+	cur_gMag2 := gx * gx + gy * gy
 
 	gMag2[idx] = cur_gMag2
 	// This gradient is not normalised. Normally you would multiply by dX / dY to account for it.
 	// Instead during lum->char translations, we will multiply the grad thresholds by dY/dX to be more efficient
-	gGrad[idx] = computeGrad(float64(cur_gx), float64(cur_gy))
+	gGrad[idx] = computeGrad(float64(gx), float64(gy))
+
+	l := +1 * lumImg.LuminosityAt(x, y-1) +
+		+1 * lumImg.LuminosityAt(x-1,y) + 
+		-4 * lumImg.LuminosityAt(x,y) +
+		+1 * lumImg.LuminosityAt(x+1,y) +
+		+1 * lumImg.LuminosityAt(x,y+1)
+
+	gLap[idx] = l
 }
 
-func applySobelPixelSafely(lumImg luminosityProvider, gGrad []float64, gMag2 []int, x, y int) {
-	cur_gx := -1 * lumImg.SafeLuminosityAt(x-1,y-1) +
+func applySobelPixelSafely(lumImg LuminosityProvider, gGrad []float64, gMag2 []int, gLap []int, x, y int) {
+	gx := -1 * lumImg.SafeLuminosityAt(x-1,y-1) +
 	+1 * lumImg.SafeLuminosityAt(x+1,y-1) +
 	-2 * lumImg.SafeLuminosityAt(x-1,y) +
 	+2 * lumImg.SafeLuminosityAt(x+1,y) +
 	-1 * lumImg.SafeLuminosityAt(x-1,y+1) +
 	+1 * lumImg.SafeLuminosityAt(x+1,y+1)
 
-	cur_gy := -1 * lumImg.SafeLuminosityAt(x-1,y-1) +
+	gy := -1 * lumImg.SafeLuminosityAt(x-1,y-1) +
 	-2 * lumImg.SafeLuminosityAt(x,y-1) +
 	-1 * lumImg.SafeLuminosityAt(x+1,y-1) +
 	+1 * lumImg.SafeLuminosityAt(x-1,y+1) +
@@ -522,49 +708,56 @@ func applySobelPixelSafely(lumImg luminosityProvider, gGrad []float64, gMag2 []i
 	+1 * lumImg.SafeLuminosityAt(x+1,y+1)
 
 	// Normally, we would have to scale the gMag2 to account for the aspect ratio.
-	cur_gMag2 := cur_gx * cur_gx + cur_gy * cur_gy
+	cur_gMag2 := gx * gx + gy * gy
 	idx := x + y * lumImg.Width()
 
 	gMag2[idx] = cur_gMag2
 	// This gradient is not normalised. Normally you would multiply by dX / dY to account for it.
 	// Instead during lum->char translations, we will multiply the grad thresholds by dY/dX to be more efficient
-	gGrad[idx] = computeGrad(float64(cur_gx), float64(cur_gy))
+	gGrad[idx] = computeGrad(float64(gx), float64(gy))
+
+	l := +1 * lumImg.SafeLuminosityAt(x, y-1) +
+		+1 * lumImg.SafeLuminosityAt(x-1,y) + 
+		-4 * lumImg.SafeLuminosityAt(x,y) +
+		+1 * lumImg.SafeLuminosityAt(x+1,y) +
+		+1 * lumImg.SafeLuminosityAt(x,y+1)
+
+	gLap[idx] = l
 }
 
-func (a *AsciiConverter) ApplySobel(lumImg luminosityProvider) defaultSobelProvider {	
+func (a *AsciiConverter) ApplySobel(lumImg LuminosityProvider) defaultSobelProvider {	
 	gWidth := lumImg.Width()
 	gHeight := lumImg.Height()
 
 	gLen := gWidth * gHeight
 	gMag2 := make([]int, gLen)
 	gGrad := make([]float64, gLen)
+	gLap := make([]int, gLen)
 
 	// Calculate G
 	for y := 1; y < gHeight - 1; y++ {
 		for x := 1; x < gWidth - 1; x++ {
-			applySobelCentralPixel(lumImg, gGrad, gMag2, x, y)
+			applySobelCentralPixel(lumImg, gGrad, gMag2, gLap, x, y)
 		}
 	}
 
 	// Apply left/right sides
 	for x := range gWidth {
-		applySobelPixelSafely(lumImg, gGrad, gMag2, x, 0)
-		applySobelPixelSafely(lumImg, gGrad, gMag2, x, gHeight - 1)
+		applySobelPixelSafely(lumImg, gGrad, gMag2, gLap, x, 0)
+		applySobelPixelSafely(lumImg, gGrad, gMag2, gLap, x, gHeight - 1)
 	}
 
 	// Apply bottom/top (skipping corners that we have already done)
 	for y := 1; y < gHeight - 1; y++ {
-		applySobelPixelSafely(lumImg, gGrad, gMag2, 0, y)
-		applySobelPixelSafely(lumImg, gGrad, gMag2, gWidth-1, y)
+		applySobelPixelSafely(lumImg, gGrad, gMag2, gLap, 0, y)
+		applySobelPixelSafely(lumImg, gGrad, gMag2, gLap, gWidth-1, y)
 	}
 
-	return makeDefaultSobelProvider(lumImg, gGrad, gMag2)
+	return makeDefaultSobelProvider(lumImg, gGrad, gMag2, gLap)
 }
 
-func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv sobelProvider, aspect_ratio float64) string {
-	adjustedGMag2Threshold := a.SobelMagnitudeThreshold * (aspect_ratio * aspect_ratio)
-	fmt.Println("Mag2", a.SobelMagnitudeThreshold)
-	fmt.Println("Adjusted Mag2", adjustedGMag2Threshold)
+func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv SobelProvider, aspect_ratio float64) string {
+	adjustedGMag2Threshold := int(a.SobelMagnitudeThreshold * (aspect_ratio * aspect_ratio))
 
 	width, height := sobelProv.Width(), sobelProv.Height()
 	// numPixels := width * height
@@ -575,29 +768,65 @@ func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv sobelProvider, aspect_ratio
 	if a.UseColor {
 		// In most cases, we will overallocate by a few hundred bytes to ensure there is no reallocation of the buffer
 		// This is because it cannot be known how much room should be left for the colour ANSI escape sequences
-		bufferSize = int((bytesPerPixel + ansiBytesPerPixel) * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line byte
+		bufferSize = int((bytesPerCharReserve + ansiAdditionalBytesReserved3Bit) * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line byte
 	} else {
-		bufferSize = int(bytesPerPixel * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line
+		bufferSize = int(bytesPerCharReserve * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line
 	}
 
 	var asciiBuilder strings.Builder
 	asciiBuilder.Grow(bufferSize)
+	var prevColor int = -1
+	var prevWasBold bool = false
+
+	// Reset everything before we write
+	asciiBuilder.WriteString("\x1b[0m")
+
 	for y := range height {
 		for x := range width {
-			currMag2 := sobelProv.SobelMag2At(x, y)
-			if currMag2 < int(adjustedGMag2Threshold) {
-				asciiBuilder.WriteRune(a.LuminenceMapper(sobelProv, x, y))
-			} else {
+			code, escapeStr := a.ANSIColorMapper(sobelProv, x, y)
+			if code != prevColor {
+				prevColor = code
+
+				asciiBuilder.WriteString(escapeStr)
+			}
+
+			if sobelProv.SobelMag2At(x, y) >= adjustedGMag2Threshold {
+				// if code != prevColor {
+					// prevColor = (0 >> 16) | (0 >> 8) | 255
+//
+					// asciiBuilder.WriteString("\x1b[38;2;0;0;255m")
+				// }
+
+				if !prevWasBold {
+					prevWasBold = true
+					asciiBuilder.WriteString("\x1b[1m")
+				}
+
 				asciiBuilder.WriteRune(edgeMapper(sobelProv, x, y))
+			} else {
+				// if code != prevColor {
+					// prevColor = code
+//
+					// asciiBuilder.WriteString(escapeStr)
+				// }
+
+				if prevWasBold {
+					prevWasBold = false
+					asciiBuilder.WriteString("\x1b[22m")
+				}
+
+				asciiBuilder.WriteRune(a.LuminenceMapper(sobelProv, x, y))
 			}
 		}
 		asciiBuilder.WriteRune('\n')
 	}
+
+	asciiBuilder.WriteString("\x1b[0m")
 	
 	return asciiBuilder.String()
 }
 
-func (a *AsciiConverter) ASCIIGen(lumProv luminosityProvider, aspect_ratio float64) string {
+func (a *AsciiConverter) ASCIIGen(lumProv LuminosityProvider, aspect_ratio float64) string {
 	width, height := lumProv.Width(), lumProv.Height()
 	// numPixels := width * height
 
@@ -605,19 +834,43 @@ func (a *AsciiConverter) ASCIIGen(lumProv luminosityProvider, aspect_ratio float
 	if a.UseColor {
 		// In most cases, we will overallocate by a few hundred bytes to ensure there is no reallocation of the buffer
 		// This is because it cannot be known how much room should be left for the colour ANSI escape sequences
-		bufferSize = int((bytesPerPixel + ansiBytesPerPixel) * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line byte
+		bufferSize = int((a.BytesPerCharToReserve + a.AdditionalBytesPerCharColor) * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line byte
 	} else {
-		bufferSize = int(bytesPerPixel * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line
+		bufferSize = int(a.BytesPerCharToReserve * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line
 	}
 
 	var asciiBuilder strings.Builder
 	asciiBuilder.Grow(bufferSize)
 
-	for y := range height {
-		for x := range width {
-			asciiBuilder.WriteRune(a.LuminenceMapper(lumProv, x, y))
+	if a.UseColor {
+		var prevColor int = -1
+
+		for y := range height {
+			for x := range width {
+				code, escapeStr := a.ANSIColorMapper(lumProv, x, y)
+				if code != prevColor {
+					prevColor = code
+
+					asciiBuilder.WriteString(escapeStr)
+				}
+
+				asciiBuilder.WriteRune(a.LuminenceMapper(lumProv, x, y))
+			}
+			asciiBuilder.WriteRune('\n')
 		}
-		asciiBuilder.WriteRune('\n')
+
+		asciiBuilder.WriteString("\x1b[0m")
+
+	} else {
+
+		for y := range height {
+			for x := range width {
+				asciiBuilder.WriteRune(a.LuminenceMapper(lumProv, x, y))
+			}
+			asciiBuilder.WriteRune('\n')
+		}
+
+		asciiBuilder.WriteString("\x1b[0m")
 	}
 	
 	return asciiBuilder.String()

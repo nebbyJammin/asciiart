@@ -10,8 +10,8 @@ import (
 func main() {
 	ascii := asciiart.New(
 		// asciiart.WithAlwaysDownscaleToTarget(true), // Downscaling before to target size
-		asciiart.WithSobel(true), // Not using sobel
-		asciiart.WithColor(false), // Not using color
+		asciiart.WithSobel(false), // Not using sobel
+		asciiart.WithColor(true), // Color
 	)
 
 	err := utils.ConvertImages(ascii)
