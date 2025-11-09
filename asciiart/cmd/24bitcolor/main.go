@@ -10,7 +10,7 @@ import (
 func main() {
 	ascii := asciiart.New(
 		// asciiart.WithAlwaysDownscaleToTarget(true), // Downscaling before to target size
-		asciiart.WithSobel(true), // Not using sobel
+		asciiart.WithSobel(false), // Not using sobel
 		asciiart.WithColor(true), // Color
 		asciiart.WithDefault24BitColorMapper(), // Use 8 bit color mapping
 	)

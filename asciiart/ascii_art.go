@@ -1,6 +1,7 @@
 package asciiart
 
 import (
+	"fmt"
 	_ "image/gif"
 	_ "image/jpeg"
 	_ "image/png"
@@ -58,14 +59,21 @@ type ColorMapper24BitOptions struct {
 
 }
 
-type AsciiConverter struct {
-	/* 
-	DownscaleFactor is the scale factor at which the image is downsampled using nearest neighbour sampling
-	without going below targetWidth and targetHeight when calling Convert().
+type downscalingModes struct { }
 
-	Any downscale factor < 1 will be interpreted (and potentially updated) to 1. This is because upscaling is not allowed.
-	*/
-	DownscaleFactor				float64
+var DownscalingModes = downscalingModes{}
+
+type DownscalingMode int
+
+func (d downscalingModes) WithRespectToAspectRatio() DownscalingMode { 
+	return DownscalingMode(0) 
+}
+
+func (d downscalingModes) IgnoreAspectRatio() DownscalingMode { 
+	return DownscalingMode(1) 
+}
+
+type AsciiConverter struct {
 	// SobelMagnitudeThreshold provides the gMag2 value threshold before an edge is registered as an edge. This field only has an effect if UseSobel is true.
 	SobelMagnitudeThreshold				float64
 	
@@ -76,8 +84,8 @@ type AsciiConverter struct {
 	// In most cases, a terminal character's height is twice its width. 
 	// So the resulting image must be 2:1 ratio to compensate for the taller height
 	OutputAspectRatio 			float64
-	// AlwaysDownscaleToTarget will ignore aspect ratio and forceably downscale the targetWidth, targetHeight. It is recommended to set this to false, and just configure the AspectRatio normally (default=2, and in most cases, it will work fine)
-	AlwaysDownscaleToTarget			bool
+
+	DownscalingMode				DownscalingMode
 	// UseSobel flags to the converter whether or not sobel edge detection should be used.
 	UseSobel					bool
 	// UseColor flags to the converter whether terminal escape sequences used to indicate colour should be used
@@ -240,7 +248,6 @@ type SobelProvider interface {
 /*
 NewDefault initialises an asciiart instance with default parameters.
 
-	- DownscaleFactor: 1
 	- EdgeStrength: 1
 	- AspectRatio: 2
 	- UseSobel: true
@@ -249,10 +256,9 @@ NewDefault initialises an asciiart instance with default parameters.
 */
 func NewDefault() *AsciiConverter {
 	return &AsciiConverter {
-		DownscaleFactor: 1, // TODO: remove this
 		SobelMagnitudeThreshold: 100000,
 		OutputAspectRatio: 2,
-		AlwaysDownscaleToTarget: true, // TODO: Change this to an enum, 0: Use downscale factor, 1: Downscale to target wrt aspect ratio, 2: Downscale to target irrespective of aspect ratio
+		DownscalingMode: DownscalingModes.WithRespectToAspectRatio(),
 		UseColor: true,
 		UseSobel: true,
 		LuminenceMapper: defaultLuminenceMapper,
@@ -274,12 +280,6 @@ func New(opts ...asciioption) *AsciiConverter {
 	return ascii
 }
 
-func WithDownscaleFactor(factor float64) asciioption {
-	return func(a *AsciiConverter) {
-		a.DownscaleFactor = factor
-	}
-}
-
 func WithEdgeStrength(strength float64) asciioption {
 	return func(a *AsciiConverter) {
 		a.SobelMagnitudeThreshold = strength
@@ -292,9 +292,9 @@ func WithAspectRatio(ratio float64) asciioption {
 	}
 }
 
-func WithAlwaysDownscaleToTarget(ignore bool) asciioption {
+func WithDownscalingMode(mode DownscalingMode) asciioption {
 	return func(a *AsciiConverter) {
-		a.AlwaysDownscaleToTarget = ignore
+		a.DownscalingMode = mode
 	}
 }
 
@@ -551,22 +551,27 @@ func (a *AsciiConverter) ConvertBytes(b []byte, targetWidth, targetHeight int) (
 }
 
 /*
-DownscaleImage downscales the src image using the DownscaleFactor field of the asciiconverter struct. This function is intended to be used to downscale before any processing happens. It will never downscale below the targetWidth or targetHeight, and will scale the shorter measure in accordance to the aspect ratio. For example, if the AspectRatio=2 (the most common scenario for terminals, because width of output is twice the height to account for 1:2 character dimensions), then the height will be shrunk down by a factor of 1/2. Conversely, if the AspectRatio=0.5 (for the case when a character is twice as long as it is tall, so output image is twice as short to compensate), then the width will be shrunk down by a factor of 1/2.
+DownscaleImage downscales the src image to some targetWidth/targetHeight, however, does it in different ways depending on the DownscalingMode. 
 
-Alternatively, if you want to downscale directly to the targetWidth/targetHeight, set IgnoreAspectRatio = true.
-That will signal the function to always downscale to the target resolution. In the common case of AspectRatio=2 (>1), it will ignore the targetHeight and forcibly downscale the height (disregarding targetHeight) so that it is in the correct aspectRatio
+In DownscalingModes.WithRespectToAspectRatio() mode:
+	- Will never downscale below targetWidth or targetHeight.
+	- Instead uses the aspect ratio to shrink either the targetWidth or targetHeight to achieve the configured OutputAspectRatio.
+	- In the common case of OutputAspectRatio=2 (the most common for terminals, because width of the output is twice the height to account for 1:2 character dimensions), the targetWidth will be used, and the targetHeight param will be ignored. Instead the height will be proportional (with respect to the aspect ratio) to the width.
+	- Conversely, if you have OutputAspectRatio=0.5 (this will probably never happen, where your characters are twice as wide as they are tall, so the output is twice as skinny), the targetHeight will be used, and the targetWidth param will be ignored. Instead the width will be proportional (with respect to the aspect ratio) to the height.
 
-If DownscaleFactor < 1, then the function will set the value to 1 (<0 values not allowed, no upscaling)
+In DownscalingModes.IgnoreAspectRatio() mode:
+	- The function simply downscales forcibly to the specified targetWidth and targetHeight.
+	- As a result, you are responsible for dealing with the aspect ratio (usually beforehand, so any cropping/image manipulation needs to be done before passing into this func or Convert())
 
-Returns the downscaled image, and the effective aspect ratio. The effective aspect ratio is approximately equal to the original aspect ratio, but may differ because of integer clamping. Use the effective aspect ratio to adjust Sobel thresholds or gradient correction, since the sampling grid may differ slightly from OutputAspectRatio due to integer rounding.
+Alternatively, if you want to downscale directly to the targetWidth/targetHeight, set the DownscalingMode = to DownscalingModes.IgnoreAspectRatio
+That will signal the function to always downscale to the target resolution 
+
+Returns the downscaled image, and the effective aspect ratio. The effective aspect ratio is should be roughly equal to the original aspect ratio, but may differ because of integer clamping. Use the effective aspect ratio to adjust Sobel thresholds or gradient correction, since the sampling grid may differ slightly from OutputAspectRatio due to integer rounding.
 */
 func (a *AsciiConverter) DownscaleImage(src image.Image, targetWidth, targetHeight int) (image.Image, float64) {
-	if a.DownscaleFactor < 1 {
-		a.DownscaleFactor = 1
-	}
 
 	// Check if we need to do anything
-	if a.DownscaleFactor == 1 && a.OutputAspectRatio == 1 {
+	if a.OutputAspectRatio == 1 && a.DownscalingMode == DownscalingModes.WithRespectToAspectRatio() {
 		return src, a.OutputAspectRatio
 	}
 
@@ -575,29 +580,37 @@ func (a *AsciiConverter) DownscaleImage(src image.Image, targetWidth, targetHeig
 	srcWidth, srcHeight := srcBounds.Dx(), srcBounds.Dy()
 
 	// NOTE: We will never upscale width or height. Instead, downscale the opposing axis.
-	if a.AlwaysDownscaleToTarget {
-		if a.OutputAspectRatio >= 1 {
-			// aspect ratio >= 1, so downscale directly to the width, then scale height accordingly
-			newWidth = targetWidth
-			newHeight = int(float64(targetWidth) / a.OutputAspectRatio)
-		} else {
-			// aspect ratio < 1, so downscale directly to the height, then scale width accordingly
-			newWidth = int(float64(targetHeight) * a.OutputAspectRatio)
+	switch a.DownscalingMode {
+		case DownscalingModes.WithRespectToAspectRatio():
+			if a.OutputAspectRatio >= 1 {
+				// aspect ratio >= 1, so downscale directly to the width, then scale height accordingly
+				newWidth = targetWidth
+				newHeight = int(float64(targetWidth) / a.OutputAspectRatio)
+			} else {
+				// aspect ratio < 1, so downscale directly to the height, then scale width accordingly
+				newWidth = int(float64(targetHeight) * a.OutputAspectRatio)
+				newHeight = targetHeight
+			}
+		case DownscalingModes.IgnoreAspectRatio():
+			newWidth = targetWidth	
 			newHeight = targetHeight
-		}
-		
-	} else {
-		if a.OutputAspectRatio >= 1 {
-			// scale width down by scale factor
-			newWidth = max(int(float64(srcWidth) / a.DownscaleFactor), targetWidth)
-			// scale height accordingly with respect to the width and aspect ratio
-			newHeight = int(float64(newWidth) / a.OutputAspectRatio)
-		} else {
-			// scale height down by scale factor
-			newHeight = max(int(float64(srcHeight) / a.DownscaleFactor), targetHeight)
-			// scale width accordingly with respect to the height and aspect ratio
-			newWidth = int(float64(newHeight) * a.OutputAspectRatio)
-		}
+
+			// old code with scale factor:
+
+			// if a.OutputAspectRatio >= 1 {
+				// // scale width down by scale factor
+				// newWidth = max(int(float64(srcWidth) / a.DownscaleFactor), targetWidth)
+				// // scale height accordingly with respect to the width and aspect ratio
+				// newHeight = int(float64(newWidth) / a.OutputAspectRatio)
+			// } else {
+				// // scale height down by scale factor
+				// newHeight = max(int(float64(srcHeight) / a.DownscaleFactor), targetHeight)
+				// // scale width accordingly with respect to the height and aspect ratio
+				// newWidth = int(float64(newHeight) * a.OutputAspectRatio)
+			// }
+		default:
+			msg := fmt.Sprintf("Unknown downscaling mode provided: %d", a.DownscalingMode)
+			panic(msg)
 	}
 
 	if newWidth == 0 {
