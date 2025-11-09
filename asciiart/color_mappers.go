@@ -63,10 +63,10 @@ func default3BitColorMapperFactory(
 		code := 0
 
 		// Check if the pixel is too dark or too bright and just assign it to black/white without doing further calculations
-		if opts.DoBlackThreshold && lum <= opts.BlackLumUpper {
+		if lum <= opts.BlackLumUpper {
 			code = 30
 			return code, format4bitCode(code)
-		} else if opts.DoWhiteThreshold && lum >= opts.WhiteLumLower {
+		} else if lum >= opts.WhiteLumLower {
 			code = 37
 			return code, format4bitCode(code)
 		}
@@ -102,14 +102,14 @@ func default4BitColorMapperFactory(opts ColorMapper4BitOptions) func(LuminosityP
 		code := 0
 
 		// Check if the pixel is too dark or too bright and just assign it to black/white without doing further calculations
-		if opts.DoBlackThreshold && lum <= opts.BlackLumUpper {
+		if lum <= opts.BlackLumUpper {
 			code = 30
 			if lum >= opts.BoldBlackLumLower {
 				code += 60
 				return code, format4bitCode(code)
 			}
 			return code, format4bitCode(code)
-		} else if opts.DoWhiteThreshold && lum >= opts.WhiteLumLower {
+		} else if lum >= opts.WhiteLumLower {
 			code = 37
 			if lum >= opts.BoldWhiteLumLower {
 				code += 60

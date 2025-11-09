@@ -22,32 +22,57 @@ const (
 	ansiAdditionalBytesReserved24Bit					= 16 // reserve an extra 16 bytes per pixel to allow room for ANSI escape sequences
 )
 
+/*
+ColorMapper3BitOptions represents the configuration of the color mapper.
+*/
 type ColorMapper3BitOptions struct {
 	// ColorThresholds specifies the minimum value for each channel [r, g, b] required to register as that colour.
 	ColorThresholds	[3]int
+	// DoReward adds extra value to 1st, 2nd, 3rd most dominant channels based on ColorRewards and DefaultReward
 	DoReward		bool
 	// ColorRewards adds additional value for the 1st, 2nd, 3rd strongest channels if the maximum delta between any two channels is bigger than ColorRewardMinRange.
 	ColorRewards	[3]int
+	// DefaultReward is added to all 3 rgb channels if the maximum delta between any two channels is smaller than ColorRewardMinRange
 	DefaultReward	int
 	// ColorRewardMinRange is the lower threshold for which ColorRewards is applied if the maximum delta between any two channels is bigger than this value.
 	ColorRewardMinRange int
-	DoBlackThreshold bool
-	DoWhiteThreshold bool
 	// BlackLumUpper is the upper bound (inclusive) for luminosity, for which pixels are rendered as black
 	BlackLumUpper	int
 	// WhiteLumLower is the lower bound (inclusive) for luminosity, for which pixels are rendered as white
 	WhiteLumLower	int
 }
 
+/*
+ColorMapper4BitOptions represents the configuration of the 4 bit color mapper. It uses a very similar technique to the 3 bit equivalent.
+*/
 type ColorMapper4BitOptions struct {
 	ColorMapper3BitOptions
 	// BoldColoredLumLower is the lower bound (inclusive) for luminosity, for which colored codes will become its bold variant
 	BoldColoredLumLower	int
 	// BoldBlackLumLower is the lower bound (inclusive) for luminosity, for which the black code (30) will become the bold version (90)
 	BoldBlackLumLower 	int
+	// BoldBlackLumLower is the lower bound (inclusive) for luminosity, for which the white code (37) will become the bold version (97)
 	BoldWhiteLumLower 	int
 }
 
+/*
+ColorMapper8BitOptions represents the configuration of the 8 bit color mapper. It uses a different technique to 3 bit and 4 bit. It will take step arrays for each r, g, b channel as well as a grey step array (of size 3).
+
+NOTE: 8-bit color uses 6x6x6 color cube - so the step fields give context for what colors to use.
+
+Each array is structured like the following:
+	- [lowest val, second val, step]
+		- [0] is the lowest value
+		- [1] is the second value
+		- [2] is the additional increase in the channel per step
+
+For example:
+	- rStep: [3]int{0, 95, 40} (the default on terminals)
+		- The red channel steps would be [0, 95, 135, 175, 215, 255]
+		- Usually all rgb channels follow this, grey step will usually be [8, 18, 10]
+	
+	The generated step values represent what colours can be made on the cube.
+*/
 type ColorMapper8BitOptions struct {
 	rStep				[3]int
 	gStep				[3]int
@@ -55,20 +80,24 @@ type ColorMapper8BitOptions struct {
 	greyStep			[3]int
 }
 
-type ColorMapper24BitOptions struct {
-
-}
-
+// downscalingModes is the private struct that functions as a namespace for the enum DownscalingMode
 type downscalingModes struct { }
 
+// DownscalingModes is the public instance of downscalingModes. Do not reassign this variable
 var DownscalingModes = downscalingModes{}
 
 type DownscalingMode int
 
+/*
+WithRespectToAspectRatio signals to the downscaling function to downscale the image to the desired size by following the aspect ratio declared in the AsciiConverter. It will never upscale, so in most cases, the height will be shrunk by a factor of 2, since most terminals use a 1:2 character height (and therefore, the output ratio is 2:1 = 2)
+*/
 func (d downscalingModes) WithRespectToAspectRatio() DownscalingMode { 
 	return DownscalingMode(0) 
 }
 
+/*
+IgnoreAspectRatio signals to the downscaling function to downscale the image to the desired size by ignoring the specified aspect ratio declared in the AsciiConverter. It will never upscale, and will scale to the targetWidth and targetHeight specified in Convert() and DownscaleImage() (so long as it is smaller than the src width and height).
+*/
 func (d downscalingModes) IgnoreAspectRatio() DownscalingMode { 
 	return DownscalingMode(1) 
 }
@@ -104,8 +133,15 @@ type AsciiConverter struct {
 
 type asciioption func(*AsciiConverter)
 
+/*
+defaultLuminosityProvider is the default LuminosityProvider implementation that caches luminosity data, so it does not need to be calculated again.
+
+NOTE: Do not resize the image after constructing a defaultLuminosityProvider. They are intended to be immutable after construction.
+*/
 type defaultLuminosityProvider struct {
+	// Stores the underlying image data. Useful for getting the color data of a char
 	image.Image
+	// LumData stores the raw luminosity (0-255) of each char in a 1D array
 	LumData 	[]int
 	width		int
 	height		int
@@ -124,14 +160,13 @@ func makeDefaultLuminosityImage(img image.Image) defaultLuminosityProvider {
 }
 
 /*
-LuminosityAt returns the luminosity (0-255) at some x, y pixel. However, if you need 1D iteration, use x as the iterating variable, and set y = 0. The LuminosityAt() function does not check if x and y are actually valid. Essentially under the hood it is doing:
-
-	return d.LumData[x + y * d.width]
+LuminosityAt returns the luminosity (0-255) at some x, y pixel. However, if you need 1D iteration, you can use x as the iterating variable, and set y = 0. Alternatively, you can use LuminosityAt1D() instead. The LuminosityAt() function does not check if x and y are actually valid. Essentially under the hood it is doing.
 */
 func (d defaultLuminosityProvider) LuminosityAt(x, y int) int {
 	return d.LumData[x + d.width * y]
 }
 
+// LuminosityAt1D returns the luminosity (0-255) at some idx in the 1D backing array for luminosity
 func (d defaultLuminosityProvider) LuminosityAt1D(idx int) int {
 	return d.LumData[idx]
 }
@@ -172,6 +207,9 @@ func (d defaultLuminosityProvider) Height() int {
 	return d.height
 }
 
+/*
+defaultSobelProvider is the default implementation for the SobelProvider interface. It caches Sobel gradient, magnitude squared and laplacian so that it does not need to be recalculated. Use this for edge detection
+*/
 type defaultSobelProvider struct {
 	LuminosityProvider
 	G_Grad		[]float64
@@ -213,7 +251,7 @@ func (d defaultSobelProvider) SobelLaplacianAt1D(idx int) int {
 }
 
 /*
-SobelMag2At returns the sobel magnitude squared at some x, y pixel. However, if you need 1D iteration, use x as the iterating variable, and set y = 0. The SobelMag2At() function does not check if x and y are actually valid. Essentially under the hood it is doing:
+SobelMag2At returns the sobel magnitude squared at some x, y pixel. However, if you need 1D iteration, use x as the iterating variable, and set y = 0. Alternatively, you can use SobelMag2At1D() instead. The SobelMag2At() function does not check if x and y are actually valid. Essentially under the hood it is doing:
 
 	return d.gMag2[x + y * d.width]
 */
@@ -221,6 +259,9 @@ func (d defaultSobelProvider) SobelMag2At(x, y int) int {
 	return d.G_Mag2[x + y * d.Width()]
 }
 
+/*
+LuminosityProvider is the interface that stores and provides luminosity data per character
+*/
 type LuminosityProvider interface {
 	image.Image
 	LuminosityAt1D(int) int
@@ -232,6 +273,9 @@ type LuminosityProvider interface {
 	Height() int
 }
 
+/*
+SobelProvider is the interface that stores and provides sobel data per character. This includes the Sobel gradient, magnitude and laplacian, which can be used to detect edges
+*/
 type SobelProvider interface {
 	image.Image
 	LuminosityProvider
@@ -244,15 +288,21 @@ type SobelProvider interface {
 	SobelLaplacianAt1D(int) int
 }
 
-//TODO: Update the docs
 /*
-NewDefault initialises an asciiart instance with default parameters.
+NewDefault initializes an asciiart instance with default parameters.
 
-	- EdgeStrength: 1
-	- AspectRatio: 2
-	- UseSobel: true
-	- DefaultLuminenceToCharMapping
-
+- SobelMagnitudeThreshold: 100000
+- OutputAspectRatio: 2
+- DownscalingMode: DownscalingModes.WithRespectToAspectRatio() [0]
+- UseColor: true
+- UseSobel: true
+- LuminenceMapper: <default internal luminence mapper>
+- EdgeMapperFactor: <default internal edge mapper factory>
+- ANSIColorMapper: <default internal 4 bit color mapper>:
+	- NOTE: You can choose which color mapper to choose from with asciioption:
+		- 3bit, 4bit, 8bit, 24bit
+- BytesPerCharToReserve: 3.5
+- AdditionalBytesPerCharColor: 2
 */
 func NewDefault() *AsciiConverter {
 	return &AsciiConverter {
@@ -261,8 +311,8 @@ func NewDefault() *AsciiConverter {
 		DownscalingMode: DownscalingModes.WithRespectToAspectRatio(),
 		UseColor: true,
 		UseSobel: true,
-		LuminenceMapper: defaultLuminenceMapper,
-		EdgeMapperFactory: defaultEdgeMapperFactory,
+		LuminenceMapper: DefaultLuminenceMapper,
+		EdgeMapperFactory: DefaultEdgeMapperFactory,
 		// ANSIColorMapper: defaultColorMapper(),
 		ANSIColorMapper: Default4BitColorMapper(),
 		BytesPerCharToReserve: bytesPerCharReserve,
@@ -270,6 +320,7 @@ func NewDefault() *AsciiConverter {
 	}
 }
 
+// New initializes an asciiart instance with default parameters, then applies options
 func New(opts ...asciioption) *AsciiConverter {
 	ascii := NewDefault()
 
@@ -280,46 +331,55 @@ func New(opts ...asciioption) *AsciiConverter {
 	return ascii
 }
 
+// WithEdgeStrength specifies a minimum Sobel Magnitude Squared for a char to be registered as an edge. It is highly recommended to go with a value between 10,000-120,000
 func WithEdgeStrength(strength float64) asciioption {
 	return func(a *AsciiConverter) {
 		a.SobelMagnitudeThreshold = strength
 	}
 }
 
+// WithAspectRatio specifies desired aspect_ratio of the image. This field is only used if DownscalingMode is set to DownscalingModes.WithRespectToAspectRatio()
 func WithAspectRatio(ratio float64) asciioption {
 	return func(a *AsciiConverter) {
 		a.OutputAspectRatio = ratio
 	}
 }
 
+/*
+WithDownscalingMode specifies how the ascii converter should downscale the image. It is recommended to use the default DownscalingModes.WithRespectToAspectRatio().
+
+TODO: Docs for downscaling mode
+*/
 func WithDownscalingMode(mode DownscalingMode) asciioption {
 	return func(a *AsciiConverter) {
 		a.DownscalingMode = mode
 	}
 }
 
+/*
+WithSobel enables/disables sobel edge detection. In general, use sobel edge detection only when the target size is big enough (approx >=100x100). Generally, with low resolution, sobel edge detection cannot reliably detect edges without looking noisy.
+*/
 func WithSobel(useSobel bool) asciioption {
 	return func(a *AsciiConverter) {
 		a.UseSobel = useSobel
 	}
 }
 
+/*
+WithColor enables/disables color. Use this in combination with the color mapper. 
+
+NOTE: Ensure that your terminal supports the color space of each color mapper. This library implements some default mappers for most standard ANSI color escape sequences (3bit, 4bit, 8bit and 24bit color space).
+*/
 func WithColor(useColor bool) asciioption {
 	return func(a *AsciiConverter) {
 		a.UseColor = useColor
 	}
 }
 
-		// ANSIColorMapper: default4BitColorMapperFactory(
-			// ColorMapper4BitOptions{
-				// ColorMapperOptions: ColorMapperOptions{
-					// ColorAdd: [3]int{50, 50, 50},
-					// ColorScale: [3]float64{1.1, 1.1, 1.1},
-				// },
-			// },
-		// ),
-
-func WithLuminenceMapper(
+/*
+WithLuminosityMapper specifies a luminosity mapper to use. A luminosity mapper maps a luminosity value (0-255) onto some character. It does not interpret the color (see WithColorMapper), it only provides the character that should be used for a normal character.
+*/
+func WithLuminosityMapper(
 	lumMapper func(lumProv LuminosityProvider, x, y int) rune,
 ) asciioption {
 	return func(a *AsciiConverter) {
@@ -327,10 +387,16 @@ func WithLuminenceMapper(
 	}
 }
 
+/*
+WithDefaultLuminenceMapper uses the default luminosity mapper provided by this library
+*/
 func WithDefaultLuminenceMapper() asciioption {
-	return WithLuminenceMapper(defaultLuminenceMapper)
+	return WithLuminosityMapper(DefaultLuminenceMapper)
 }
 
+/*
+WithEdgeMapperFactory specifies an edge mapper factory to use. As opposed to the luminosity mapper, this needs to be a factory, because edge gradients need to be adjusted depending on the target aspect ratio. This is due to the fact that different aspect ratios will have a different effect on the resulting sobel gradient and magnitude
+*/
 func WithEdgeMapperFactory(
 	edgeMapFactory func(aspect_ratio float64) func(sobelProv SobelProvider, x, y int) rune,
 ) asciioption {
@@ -339,10 +405,18 @@ func WithEdgeMapperFactory(
 	}
 }
 
+/*
+WithDefaultEdgeMapperFactory uses the default edge mapper provided by this library
+*/
 func WithDefaultEdgeMapperFactory() asciioption {
-	return WithEdgeMapperFactory(defaultEdgeMapperFactory)
+	return WithEdgeMapperFactory(DefaultEdgeMapperFactory)
 }
 
+/*
+WithColorMapper specifies a color mapper to use. The color mapper takes in a LuminosityProvider and an x, y character position and returns
+	- The character code (OR a unique identifier)
+	- The formatted ANSI escape sequence to be inserted into the final result string
+*/
 func WithColorMapper(
 	colorMapper func(lumProv LuminosityProvider, x int, y int) (int, string),
 ) asciioption {
@@ -351,6 +425,9 @@ func WithColorMapper(
 	}
 }
 
+/*
+defaultColorMapper provides the default configuration for the 3 bit color mapper provided by this library. 99% of terminals should support at least 3 bit color space.
+*/
 func defaultColorMapper() func(LuminosityProvider, int, int) (int, string) {
 	return Default3BitColorMapper()
 }
@@ -363,16 +440,20 @@ var default3BitOpts = ColorMapper3BitOptions {
 	ColorRewards: [3]int{40, 20, 10},
 	DefaultReward: 24,
 	ColorRewardMinRange: 20,
-	DoBlackThreshold: true,
 	BlackLumUpper: 50,
-	DoWhiteThreshold: true,
 	WhiteLumLower: 200,
 }
 
+/*
+defaultColorMapper provides the default configuration for the 3 bit color mapper provided by this library. 99% of terminals should support at least 3 bit color space.
+*/
 func Default3BitColorMapper() func(LuminosityProvider, int, int) (int, string) {
 	return default3BitColorMapperFactory(default3BitOpts)
 }
 
+/*
+Default4BitColorMapper provides the default configuration for the 4 bit color mapper provided by this library. 99% of terminals should support at least 4 bit color space.
+*/
 func Default4BitColorMapper() func(LuminosityProvider, int, int) (int, string) {
 	opts := ColorMapper4BitOptions {
 		ColorMapper3BitOptions: default3BitOpts,
@@ -384,6 +465,9 @@ func Default4BitColorMapper() func(LuminosityProvider, int, int) (int, string) {
 	return default4BitColorMapperFactory(opts)
 }
 
+/*
+Default8BitColorMapper provides the default configuration for the 8 bit color mapper provided by this library. 95%+ of terminals should support at least 8 bit color space.
+*/
 func Default8BitColorMapper() func(LuminosityProvider, int, int) (int, string) {
 	opts := ColorMapper8BitOptions {
 		rStep: [3]int{0, 95, 40},
@@ -395,14 +479,23 @@ func Default8BitColorMapper() func(LuminosityProvider, int, int) (int, string) {
 	return default8BitColorMapperFactory(opts)
 }
 
+/*
+Default8BitColorMapper provides the default configuration for the 24 bit color mapper provided by this library. 95%+ of terminals should support 24 bit color space.
+*/
 func Default24BitColorMapper() func(LuminosityProvider, int, int) (int, string) {
 	return default24BitColorMapperFactory()
 }
 
+/*
+WithDefaultColorMapper sets the ascii converter to use the default color map. The default color mapper is the 3 Bit Color Mapper implemented by this library.
+*/
 func WithDefaultColorMapper() asciioption {
 	return WithColorMapper(defaultColorMapper())
 }
 
+/*
+WithDefault3BitColorMapper sets the ascii converter to use the default configuration for the library implementation of 3 bit color map.
+*/
 func WithDefault3BitColorMapper() asciioption {
 	return func(a *AsciiConverter) {
 		a.ANSIColorMapper = Default3BitColorMapper()
@@ -411,6 +504,9 @@ func WithDefault3BitColorMapper() asciioption {
 	}
 }
 
+/*
+WithDefault4BitColorMapper sets the ascii converter to use the default configuration for the library implementation of 4 bit color map.
+*/
 func WithDefault4BitColorMapper() asciioption {
 	return func(a *AsciiConverter) {
 		a.ANSIColorMapper = Default4BitColorMapper()
@@ -419,6 +515,9 @@ func WithDefault4BitColorMapper() asciioption {
 	}
 }
 
+/*
+WithDefault8BitColorMapper sets the ascii converter to use the default configuration for the library implementation of 8 bit color map.
+*/
 func WithDefault8BitColorMapper() asciioption {
 	return func(a *AsciiConverter) {
 		a.ANSIColorMapper = Default8BitColorMapper()
@@ -427,6 +526,9 @@ func WithDefault8BitColorMapper() asciioption {
 	}
 }
 
+/*
+WithDefault24BitColorMapper sets the ascii converter to use the default configuration for the library implementation of 24 bit color map.
+*/
 func WithDefault24BitColorMapper() asciioption {
 	return func(a *AsciiConverter) {
 		a.ANSIColorMapper = Default24BitColorMapper()
@@ -435,11 +537,12 @@ func WithDefault24BitColorMapper() asciioption {
 	}
 }
 
-// func defaultLuminenceMapperFactory() func(luminosityProvider, int) rune {
-	// return defaultLuminenceMapper
-// }
+/*
+DefaultLuminenceMapper is the default implementation of a mapper func that takes a luminence value between 0 and 255, and returns a rune. It will use generic symbols commonly seen in ascii art. The list of symbols are:
 
-func defaultLuminenceMapper(lumProv LuminosityProvider, x, y int) rune {
+	$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\\|()1{}[]?-_+~<>i!lI;:,"^`'.
+*/
+func DefaultLuminenceMapper(lumProv LuminosityProvider, x, y int) rune {
 	const charRamp = `$@B%8&WM#*oahkbdpqwmZO0QLCJUYXzcvunxrjft/\|()1{}[]?-_+~<>i!lI;:,"^` + "`" + `'. `
 	const charLen = float64(len(charRamp))
 
@@ -449,7 +552,12 @@ func defaultLuminenceMapper(lumProv LuminosityProvider, x, y int) rune {
 	return rune(charRamp[charIdx])
 }
 
-func defaultEdgeMapperFactory(aspect_ratio float64) func(SobelProvider, int, int) rune {
+/*
+DefaultEdgeMapperFactory is the default implementation of a factory that returns an edge mapper for some aspect ratio.
+
+The function it returns translates a pixel/character that has been classified as an edge (based on its sobel magnitude squared), and then assigns a character that represents its curvature using the sobel gradient.
+*/
+func DefaultEdgeMapperFactory(aspect_ratio float64) func(SobelProvider, int, int) rune {
 	type edgeGlyphStop struct {
 		rune
 		float64
@@ -504,6 +612,9 @@ func defaultEdgeMapperFactory(aspect_ratio float64) func(SobelProvider, int, int
 	}
 }
 
+/*
+With3BitColorMapper signals to the ascii converter to use the default 3 bit color mapper with opts as the configuration. Specify the bytesPerCharToReserve and colorBytesPerCharToReserve. If you do not plan on using color, just use 0 for colorBytesPerCharToReserve.
+*/
 func With3BitColorMapper(opts ColorMapper3BitOptions, bytesPerCharToReserve, colorBytesPerCharToReserve float64) asciioption {
 	return func(a *AsciiConverter) {
 		a.BytesPerCharToReserve = bytesPerCharToReserve
@@ -513,6 +624,9 @@ func With3BitColorMapper(opts ColorMapper3BitOptions, bytesPerCharToReserve, col
 	}
 }
 
+/*
+With4BitColorMapper signals to the ascii converter to use the default 4 bit color mapper with opts as the configuration. Specify the bytesPerCharToReserve and colorBytesPerCharToReserve. If you do not plan on using color, just use 0 for colorBytesPerCharToReserve.
+*/
 func With4BitColorMapper(opts ColorMapper4BitOptions, bytesPerCharToReserve, colorBytesPerCharToReserve float64) asciioption {
 	return func(a *AsciiConverter) {
 		a.BytesPerCharToReserve = bytesPerCharToReserve
@@ -521,6 +635,9 @@ func With4BitColorMapper(opts ColorMapper4BitOptions, bytesPerCharToReserve, col
 	}
 }
 
+/*
+With8BitColorMapper signals to the ascii converter to use the default 8 bit color mapper with opts as the configuration. Specify the bytesPerCharToReserve and colorBytesPerCharToReserve. If you do not plan on using color, just use 0 for colorBytesPerCharToReserve.
+*/
 func With8BitColorMapper(opts ColorMapper8BitOptions, bytesPerCharToReserve, colorBytesPerCharToReserve float64) asciioption {
 	return func(a *AsciiConverter) {
 		a.BytesPerCharToReserve = bytesPerCharToReserve
@@ -529,7 +646,10 @@ func With8BitColorMapper(opts ColorMapper8BitOptions, bytesPerCharToReserve, col
 	}
 }
 
-func With24BitColorMapper(opts ColorMapper24BitOptions, bytesPerCharToReserve, colorBytesPerCharToReserve float64) asciioption {
+/*
+With24BitColorMapper signals to the ascii converter to use the default 24 bit color mapper. Specify the bytesPerCharToReserve and colorBytesPerCharToReserve. If you do not plan on using color, just use 0 for colorBytesPerCharToReserve.
+*/
+func With24BitColorMapper(bytesPerCharToReserve, colorBytesPerCharToReserve float64) asciioption {
 	return func(a *AsciiConverter) {
 		a.BytesPerCharToReserve = bytesPerCharToReserve
 		a.AdditionalBytesPerCharColor = colorBytesPerCharToReserve
@@ -537,6 +657,21 @@ func With24BitColorMapper(opts ColorMapper24BitOptions, bytesPerCharToReserve, c
 	}
 }
 
+/*
+ConvertReader takes an io.Reader that can read the bytes of an image. Image formats supported are jpeg, png, gif. If you want to support more formats, initialize the decoder package at the top of any of your go files:
+
+import (
+	... <other imports>
+
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+
+	...
+)
+
+ConvertReader uses image.Decode() under the hood, so it is important to register file formats so the image module knows how to decode the bytes.
+*/
 func (a *AsciiConverter) ConvertReader(r io.Reader, targetWidth, targetHeight int) (string, error) {
 	img, _, err := image.Decode(r)
 	if err != nil {
@@ -546,6 +681,22 @@ func (a *AsciiConverter) ConvertReader(r io.Reader, targetWidth, targetHeight in
 	return a.Convert(img, targetWidth, targetHeight), nil
 }
 
+/*
+ConvertBytes takes a byte slice representing an image. Image formats supported are jpeg, png, gif. If you want to support more formats, initialize the decoder package at the top of any of your go files:
+
+import (
+	... <other imports>
+
+	_ "image/gif"
+	_ "image/jpeg"
+	_ "image/png"
+	_ "mycustomdecoder/mycustomformat" // Here is your custom file format
+	
+	...
+)
+
+ConvertBytes calls ConvertReader() under the hood which uses image.Decode(), so it is important to register file formats so the image module knows how to decode the bytes.
+*/
 func (a *AsciiConverter) ConvertBytes(b []byte, targetWidth, targetHeight int) (string, error) {
 	return a.ConvertReader(bytes.NewReader(b), targetWidth, targetHeight)
 }
@@ -640,6 +791,9 @@ func (a *AsciiConverter) DownscaleImage(src image.Image, targetWidth, targetHeig
 	return downscaledImg, float64(newWidth) / float64(newHeight)
 }
 
+/*
+MapLuminosity returns the default implementation of LuminosityProvider from an image by precalculating all luminosity values and storing it.
+*/
 func (a *AsciiConverter) MapLuminosity(img image.Image) defaultLuminosityProvider {
 	lumImg := makeDefaultLuminosityImage(img)
 	
@@ -738,6 +892,9 @@ func applySobelPixelSafely(lumImg LuminosityProvider, gGrad []float64, gMag2 []i
 	gLap[idx] = l
 }
 
+/*
+ApplySobel returns the defaultSobelProvider implementation of SobelProvider from a luminosity provider
+*/
 func (a *AsciiConverter) ApplySobel(lumImg LuminosityProvider) defaultSobelProvider {	
 	gWidth := lumImg.Width()
 	gHeight := lumImg.Height()
@@ -769,6 +926,9 @@ func (a *AsciiConverter) ApplySobel(lumImg LuminosityProvider) defaultSobelProvi
 	return makeDefaultSobelProvider(lumImg, gGrad, gMag2, gLap)
 }
 
+/*
+ASCIIGenWithSobel converts a SobelProvider to ascii string. If you are not interested in making custom ascii generators, see Convert(), ConvertBytes() and ConvertReader()
+*/
 func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv SobelProvider, aspect_ratio float64) string {
 	adjustedGMag2Threshold := int(a.SobelMagnitudeThreshold * (aspect_ratio * aspect_ratio))
 
@@ -839,6 +999,9 @@ func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv SobelProvider, aspect_ratio
 	return asciiBuilder.String()
 }
 
+/*
+ASCIIGen takes a LuminosityProvider and generates an ascii string from it. If you are not interested in making custom ascii generators, see Convert(), ConvertBytes() and ConvertReader()
+*/
 func (a *AsciiConverter) ASCIIGen(lumProv LuminosityProvider, aspect_ratio float64) string {
 	width, height := lumProv.Width(), lumProv.Height()
 	// numPixels := width * height
@@ -889,6 +1052,13 @@ func (a *AsciiConverter) ASCIIGen(lumProv LuminosityProvider, aspect_ratio float
 	return asciiBuilder.String()
 }
 
+/*
+Convert takes an image and generates an ascii art string with targetWidth and targetHeight parameters. 
+
+However, if targetWidth and targetHeight do not follow the OutputAspectRatio, then one of targetWidth and targetHeight will be ignored by default (usually height if you are using OutputAspectRatio = 2 which is standard).
+
+To ignore this behaviour and always convert to target width and height, specify DownscalingMode to be equal to DownscalingModes.IgnoreAspectRatio
+*/
 func (a *AsciiConverter) Convert(img image.Image, targetWidth, targetHeight int) string {
 	var effectiveAspectRatio float64
 	img, effectiveAspectRatio = a.DownscaleImage(img, targetWidth, targetHeight)
