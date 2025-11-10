@@ -427,15 +427,15 @@ func DefaultEdgeMapperFactory(aspect_ratio float64) func(SobelProvider, int, int
 	const maxGrad = float64(60.5)
 
 	stops := [...]edgeGlyphStop{
-		{rune: '-', float64: math.Nextafter(-60, math.Inf(-1))},		// (-inf, -7)
-		{rune: 'l', float64: math.Nextafter(-40, math.Inf(-1))},		// [-7, -5)
-		{rune: 'L', float64: math.Nextafter(-30, math.Inf(-1))},		// [-5, -3)
-		{rune: '\\', float64: math.Nextafter(-3, math.Inf(-1))},	// [-3, -0.5)
-		{rune: '|', float64: 3},									// [-0.5, 0.5]
-		{rune: '/', float64: math.Nextafter(30, math.Inf(1))},		// (0.5, 3]
-		{rune: 'J', float64: math.Nextafter(40, math.Inf(1))},		// (3, 5]
-		{rune: 'j', float64: math.Nextafter(60, math.Inf(1))},		// (5, 7]
-		{rune: '-', float64: math.Inf(1)},							// (7, inf)
+		{rune: '=', float64: math.Nextafter(-6, math.Inf(-1))},		// (-inf, -7)
+		{rune: '\\', float64: math.Nextafter(-2, math.Inf(-1))},		// [-7, -5)
+		{rune: 'l', float64: math.Nextafter(-1, math.Inf(-1))},		// [-5, -3)
+		{rune: 'L', float64: math.Nextafter(-0.5, math.Inf(-1))},	// [-3, -0.5)
+		{rune: '|', float64: 0.5},									// [-0.5, 0.5]
+		{rune: 'J', float64: math.Nextafter(1, math.Inf(1))},		// (0.5, 3]
+		{rune: 'j', float64: math.Nextafter(2, math.Inf(1))},		// (3, 5]
+		{rune: '/', float64: math.Nextafter(7, math.Inf(1))},		// (5, 7]
+		{rune: '=', float64: math.Inf(1)},							// (7, inf)
 	}
 
 	const precision = float64(10)
@@ -592,8 +592,6 @@ func (a *AsciiConverter) DownscaleImage(src image.Image, targetWidth, targetHeig
 	// Write pixels to the downscaled image
 	for x := range newWidth {
 		for y := range newHeight {
-			// TODO: Add other downsampling methods, currently using nearest neighbour
-
 			srcX := int(float64(x) * float64(srcWidth) / float64(newWidth))
 			srcY := int(float64(y) * float64(srcHeight) / float64(newHeight))
 
@@ -641,6 +639,44 @@ func computeGrad(x float64, y float64) float64 {
 }
 
 func applySobelCentralPixel(lumImg LuminosityProvider, gGrad []float64, gMag2 []int, gLap []float64, x, y int) {
+	/*
+		
+	Sobel Value for any character can be decomposed into a kernel for the dx and dy components as defined by the following:
+
+			| -1  0 +1 |
+	gx = 	| -2  0 +2 | * A
+			| -1  0 +1 |
+
+			| -1 -2 -1 |
+	gy = 	|  0  0  0 | * A
+			| +1 +2 +1 |
+
+	<-- Magnitude -->
+
+	From there, we can compute the magnitude, which is a scalar that quantifies how much change in brightness there is from that character to its neighbours.
+
+	|G| = sqrt(gx^2 + gy^2)
+
+	However, it is inefficient to square root for every character (potentially over hundreds of thousands of characters)
+	Instead we will just compute and store |G|^2, and threshold based on that.
+
+	|G|^2 = gx * gx + gy * gy
+
+	<-- Gradient -->
+
+	Sobel gradient represents the direction in which the change in brightness happened.
+	- Positive gradient means the color change happens from bottom left to top right.
+	- Negative gradient means the color change happens from top left to bottom right.
+	- An approximately 0 gradient represents a color change that happened from left to right.
+	- Infinite gradient means the color change happened from top to bottom (or vice versa)
+
+	grad = gy/gx
+
+	<-- Sobel Laplacian (Second Derivative) -->
+
+	See https://en.wikipedia.org/wiki/Sobel_operator for more information
+	*/
+
 	idx := x + y * lumImg.Width()
 
 	gx := -1 * lumImg.LuminosityAt(x-1,y-1) +
