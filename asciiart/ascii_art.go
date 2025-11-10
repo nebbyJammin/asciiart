@@ -137,7 +137,7 @@ type AsciiConverter struct {
 	AdditionalBytesPerCharColor 					float64
 }
 
-type asciioption func(*AsciiConverter)
+type AsciiOption func(*AsciiConverter)
 
 /*
 defaultLuminosityProvider is the default LuminosityProvider implementation that caches luminosity data, so it does not need to be calculated again.
@@ -326,7 +326,7 @@ func NewDefault() *AsciiConverter {
 }
 
 // New initializes an asciiart instance with default parameters, then applies options
-func New(opts ...asciioption) *AsciiConverter {
+func New(opts ...AsciiOption) *AsciiConverter {
 	ascii := NewDefault()
 
 	for _, o := range opts {
@@ -829,11 +829,13 @@ func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv SobelProvider, aspect_ratio
 
 	for y := range height {
 		for x := range width {
-			code, escapeStr := a.ANSIColorMapper(sobelProv, x, y)
-			if code != prevColor {
-				prevColor = code
+			if a.UseColor {
+				code, escapeStr := a.ANSIColorMapper(sobelProv, x, y)
+				if code != prevColor {
+					prevColor = code
 
-				asciiBuilder.WriteString(escapeStr)
+					asciiBuilder.WriteString(escapeStr)
+				}
 			}
 
 			if sobelProv.SobelMag2At(x, y) >= adjustedGMag2Threshold &&
@@ -879,36 +881,26 @@ func (a *AsciiConverter) ASCIIGen(lumProv LuminosityProvider, aspect_ratio float
 	var asciiBuilder strings.Builder
 	asciiBuilder.Grow(bufferSize)
 
-	if a.UseColor {
-		var prevColor int = -1
+	var prevColor int = -1
 
-		for y := range height {
-			for x := range width {
+	for y := range height {
+		for x := range width {
+			if a.UseColor {
 				code, escapeStr := a.ANSIColorMapper(lumProv, x, y)
 				if code != prevColor {
 					prevColor = code
 
 					asciiBuilder.WriteString(escapeStr)
 				}
-
-				asciiBuilder.WriteRune(a.LuminosityMapper(lumProv, x, y))
 			}
-			asciiBuilder.WriteRune('\n')
+
+			asciiBuilder.WriteRune(a.LuminosityMapper(lumProv, x, y))
 		}
-
-		asciiBuilder.WriteString("\x1b[0m")
-
-	} else {
-
-		for y := range height {
-			for x := range width {
-				asciiBuilder.WriteRune(a.LuminosityMapper(lumProv, x, y))
-			}
-			asciiBuilder.WriteRune('\n')
-		}
-
-		asciiBuilder.WriteString("\x1b[0m")
+		asciiBuilder.WriteRune('\n')
 	}
+
+	asciiBuilder.WriteString("\x1b[0m")
+
 	
 	return asciiBuilder.String()
 }
