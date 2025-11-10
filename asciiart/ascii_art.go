@@ -103,32 +103,38 @@ func (d downscalingModes) IgnoreAspectRatio() DownscalingMode {
 }
 
 type AsciiConverter struct {
-	// SobelMagnitudeThresholdNormalized provides the gMag2 value threshold before an edge is registered as an edge. This field only has an effect if UseSobel is true.
-	SobelMagnitudeThresholdNormalized				float64
+	// SobelMagnitudeSqThresholdNormalized provides the minium gMag2 value before an edge is registered as an edge. This field only has an effect if UseSobel is true. See WithSobelMagSquaredThresholdNormalized()
+	SobelMagnitudeSqThresholdNormalized				float64
 
-	// SobelLaplacianMagnitudeThreshold provides the maximum laplacian value for an edge to be considered an edge.
+	// SobelLaplacianMagnitudeThreshold provides the maximum laplacian value for an edge to be considered an edge. See WithSobelLaplacianThresholdNormalized()
 	SobelLaplacianThresholdNormalized				float64
+
+	// Will use bold characters to outline edges detected by the sobel edge detection. Because of this, this only has an effect if UseSobel is true, and if the algorithm can actually detect any edges
+	SobelOutlineIsBold								bool
 
 	// OutputAspectRatio is the aspect ratio of the resulting image (char_x / char_y).
 	// In most cases, a terminal character's height is twice its width. 
 	// So the resulting image must be 2:1 ratio to compensate for the taller height
-	OutputAspectRatio 			float64
+	OutputAspectRatio 								float64
 
-	DownscalingMode				DownscalingMode
+	//DownscalingMode flags to the converter how to downscale the image before any conversion happens. By default, it will ALWAYS downscale with respect to the aspect ratio (DownscalingModes.WithRespectToAspectRatio() [0])
+	DownscalingMode									DownscalingMode
+
 	// UseSobel flags to the converter whether or not sobel edge detection should be used.
-	UseSobel					bool
+	UseSobel										bool
+	
 	// UseColor flags to the converter whether terminal escape sequences used to indicate colour should be used
-	UseColor					bool
+	UseColor										bool
 	// The function that converts a luminence value (0-255) to a rune
-	LuminenceMapper				func(lumProv LuminosityProvider, x, y int) rune
+	LuminosityMapper									func(lumProv LuminosityProvider, x, y int) rune
 	// The function that converts an approximate gradient to a rune
-	EdgeMapperFactory			func(aspect_ratio float64) func(sobelProv SobelProvider, x, y int) rune
-	ANSIColorMapper				func(lumProv LuminosityProvider, x, y int) (code_id int, fmted_code string)
+	EdgeMapperFactory								func(aspect_ratio float64) func(sobelProv SobelProvider, x, y int) rune
+	ANSIColorMapper									func(lumProv LuminosityProvider, x, y int) (code_id int, fmted_code string)
 
 	// BytesPerCharToReserve is the amount of bytes per character to reserve in the result buffer
-	BytesPerCharToReserve		float64
+	BytesPerCharToReserve							float64
 	// AdditionalBytesPerCharColor is the amount of additional bytes per character to reserve in the result buffer if color is being used
-	AdditionalBytesPerCharColor float64
+	AdditionalBytesPerCharColor 					float64
 }
 
 type asciioption func(*AsciiConverter)
@@ -286,7 +292,9 @@ type SobelProvider interface {
 /*
 NewDefault initializes an asciiart instance with default parameters.
 
-- SobelMagnitudeThreshold: 100000
+- SobelMagnitudeThresholdNormalized: 80000
+- SobelLaplacianThresholdNormalized: 300
+- SobelOutlineIsBold: true
 - OutputAspectRatio: 2
 - DownscalingMode: DownscalingModes.WithRespectToAspectRatio() [0]
 - UseColor: true
@@ -301,13 +309,14 @@ NewDefault initializes an asciiart instance with default parameters.
 */
 func NewDefault() *AsciiConverter {
 	return &AsciiConverter {
-		SobelMagnitudeThresholdNormalized: 100000,
-		SobelLaplacianThresholdNormalized: 5,
+		SobelMagnitudeSqThresholdNormalized: 80000,
+		SobelLaplacianThresholdNormalized: 300,
+		SobelOutlineIsBold: true,
 		OutputAspectRatio: 2,
 		DownscalingMode: DownscalingModes.WithRespectToAspectRatio(),
 		UseColor: true,
 		UseSobel: true,
-		LuminenceMapper: DefaultLuminenceMapper,
+		LuminosityMapper: DefaultLuminenceMapper,
 		EdgeMapperFactory: DefaultEdgeMapperFactory,
 		// ANSIColorMapper: defaultColorMapper(),
 		ANSIColorMapper: Default4BitColorMapper(),
@@ -740,7 +749,7 @@ func (a *AsciiConverter) ApplySobel(lumImg LuminosityProvider) defaultSobelProvi
 ASCIIGenWithSobel converts a SobelProvider to ascii string. If you are not interested in making custom ascii generators, see Convert(), ConvertBytes() and ConvertReader()
 */
 func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv SobelProvider, aspect_ratio float64) string {
-	adjustedGMag2Threshold := int(a.SobelMagnitudeThresholdNormalized * (aspect_ratio * aspect_ratio))
+	adjustedGMag2Threshold := int(a.SobelMagnitudeSqThresholdNormalized * (aspect_ratio * aspect_ratio))
 
 	width, height := sobelProv.Width(), sobelProv.Height()
 	// numPixels := width * height
@@ -774,32 +783,20 @@ func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv SobelProvider, aspect_ratio
 			}
 
 			if sobelProv.SobelMag2At(x, y) >= adjustedGMag2Threshold &&
-				sobelProv.SobelLaplacianAt(x, y) <= a.SobelLaplacianThresholdNormalized {
-				// if code != prevColor {
-					// prevColor = (0 >> 16) | (0 >> 8) | 255
-//
-					// asciiBuilder.WriteString("\x1b[38;2;0;0;255m")
-				// }
-
-				if !prevWasBold {
+				math.Abs(sobelProv.SobelLaplacianAt(x, y)) <= a.SobelLaplacianThresholdNormalized {
+				if a.SobelOutlineIsBold && !prevWasBold {
 					prevWasBold = true
-					asciiBuilder.WriteString("\x1b[1m")
+					asciiBuilder.WriteString("\x1b[1m") // Make bold
 				}
 
 				asciiBuilder.WriteRune(edgeMapper(sobelProv, x, y))
 			} else {
-				// if code != prevColor {
-					// prevColor = code
-//
-					// asciiBuilder.WriteString(escapeStr)
-				// }
-
 				if prevWasBold {
 					prevWasBold = false
-					asciiBuilder.WriteString("\x1b[22m")
+					asciiBuilder.WriteString("\x1b[22m") // Reset bold
 				}
 
-				asciiBuilder.WriteRune(a.LuminenceMapper(sobelProv, x, y))
+				asciiBuilder.WriteRune(a.LuminosityMapper(sobelProv, x, y))
 			}
 		}
 		asciiBuilder.WriteRune('\n')
@@ -815,7 +812,6 @@ ASCIIGen takes a LuminosityProvider and generates an ascii string from it. If yo
 */
 func (a *AsciiConverter) ASCIIGen(lumProv LuminosityProvider, aspect_ratio float64) string {
 	width, height := lumProv.Width(), lumProv.Height()
-	// numPixels := width * height
 
 	var bufferSize int
 	if a.UseColor {
@@ -841,7 +837,7 @@ func (a *AsciiConverter) ASCIIGen(lumProv LuminosityProvider, aspect_ratio float
 					asciiBuilder.WriteString(escapeStr)
 				}
 
-				asciiBuilder.WriteRune(a.LuminenceMapper(lumProv, x, y))
+				asciiBuilder.WriteRune(a.LuminosityMapper(lumProv, x, y))
 			}
 			asciiBuilder.WriteRune('\n')
 		}
@@ -852,7 +848,7 @@ func (a *AsciiConverter) ASCIIGen(lumProv LuminosityProvider, aspect_ratio float
 
 		for y := range height {
 			for x := range width {
-				asciiBuilder.WriteRune(a.LuminenceMapper(lumProv, x, y))
+				asciiBuilder.WriteRune(a.LuminosityMapper(lumProv, x, y))
 			}
 			asciiBuilder.WriteRune('\n')
 		}

@@ -1,14 +1,7 @@
 package asciiart
 
-// WithEdgeStrength specifies a minimum Sobel Magnitude Squared for a char to be registered as an edge. It is highly recommended to go with a value between 10,000-120,000
-func WithEdgeStrength(strength float64) asciioption {
-	return func(a *AsciiConverter) {
-		a.SobelMagnitudeThresholdNormalized = strength
-	}
-}
-
-// WithAspectRatio specifies desired aspect_ratio of the image. This field is only used if DownscalingMode is set to DownscalingModes.WithRespectToAspectRatio()
-func WithAspectRatio(ratio float64) asciioption {
+// WithOutputAspectRatio specifies desired aspect_ratio of the image. This field is only used if DownscalingMode is set to DownscalingModes.WithRespectToAspectRatio()
+func WithOutputAspectRatio(ratio float64) asciioption {
 	return func(a *AsciiConverter) {
 		a.OutputAspectRatio = ratio
 	}
@@ -52,7 +45,7 @@ func WithLuminosityMapper(
 	lumMapper func(lumProv LuminosityProvider, x, y int) rune,
 ) asciioption {
 	return func(a *AsciiConverter) {
-		a.LuminenceMapper = lumMapper
+		a.LuminosityMapper = lumMapper
 	}
 }
 
@@ -187,5 +180,38 @@ func With24BitColorMapper(bytesPerCharToReserve, colorBytesPerCharToReserve floa
 		a.BytesPerCharToReserve = bytesPerCharToReserve
 		a.AdditionalBytesPerCharColor = colorBytesPerCharToReserve
 		a.ANSIColorMapper = default24BitColorMapperFactory()
+	}
+}
+
+/*
+WithSobelMagSquaredThresholdNormalized sets the field SobelMagnitudeSqThresholdNormalized which is the minimum sobel magnitude (from the sobel kernel) before accounting for aspect ratio, for which a character is considered an edge.
+
+If a character is considered an edge, then its ASCII character given will be determined by the edge mapper instead of the luminosity mapper
+
+It is recommended to use a value between 50,000-120,000. Note that the values are so large because the threshold is measured in magnitude squared.
+*/
+func WithSobelMagSquaredThresholdNormalized(mag2 float64) asciioption {
+	return func(a *AsciiConverter) {
+		a.SobelMagnitudeSqThresholdNormalized = mag2
+	}
+}
+
+/*
+WithSobelLaplacianThresholdNormalized sets the field SobelLaplacianThresholdNormalized which is the maximum laplacian value from the sobel kernel before account for aspect ratio, for which a charcter is considered an edge.
+
+If a character is considered an edge, then its ASCII character given will be determined byt he edge mapper instead of the luminosity mapper
+
+It is recommended to use a value between 100-400, with the higher the value increasing the number of edges detected.
+*/
+func WithSobelLaplacianThresholdNormalized(lMag float64) asciioption {
+	return func(a *AsciiConverter) {
+		a.SobelLaplacianThresholdNormalized = lMag
+	}
+}
+
+// WithBoldedSobelOutline enables/disables bolded outlines/edges detected by the sobel kernel
+func WithBoldedSobelOutline(makeOutlinesBold bool) asciioption {
+	return func(a *AsciiConverter) {
+		a.SobelOutlineIsBold = makeOutlinesBold
 	}
 }

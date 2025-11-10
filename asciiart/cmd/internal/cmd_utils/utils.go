@@ -10,6 +10,11 @@ import (
 	"github.com/nebbyJammin/asciiart"
 )
 
+const (
+	width = 100
+	height = 100
+)
+
 func ConvertImages(a *asciiart.AsciiConverter) error {
 	wd, err := os.Getwd()
 	if err != nil {
@@ -36,7 +41,7 @@ func ConvertImages(a *asciiart.AsciiConverter) error {
 
 		start := time.Now()
 
-		asciiStr, err := a.ConvertBytes(f, 100, 100)
+		asciiStr, err := a.ConvertBytes(f, width, height)
 		if err != nil {
 			fmt.Printf("Error converting to ascii: %s\n", err)
 			return err
