@@ -821,25 +821,29 @@ func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv SobelProvider, aspect_ratio
 
 	var asciiBuilder strings.Builder
 	asciiBuilder.Grow(bufferSize)
-	var prevColor int = -1
-	var prevWasBold bool = false
 
+	var prevWasBold bool = false
+	var prevCode int = -1
+	var code = -1
+	var escapeStr = ""
 	// Reset everything before we write
 	asciiBuilder.WriteString("\x1b[0m")
 
 	for y := range height {
 		for x := range width {
 			if a.UseColor {
-				code, escapeStr := a.ANSIColorMapper(sobelProv, x, y)
-				if code != prevColor {
-					prevColor = code
+				code, escapeStr = a.ANSIColorMapper(sobelProv, x, y)
+				if code != prevCode {
+					prevCode = code
 
 					asciiBuilder.WriteString(escapeStr)
 				}
 			}
 
+			// Check if we should use the edge or the luminosity mapper
 			if sobelProv.SobelMag2At(x, y) >= adjustedGMag2Threshold &&
 				math.Abs(sobelProv.SobelLaplacianAt(x, y)) <= a.SobelLaplacianThresholdNormalized {
+					
 				if a.SobelOutlineIsBold && !prevWasBold {
 					prevWasBold = true
 					asciiBuilder.WriteString("\x1b[1m") // Make bold
@@ -847,6 +851,7 @@ func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv SobelProvider, aspect_ratio
 
 				asciiBuilder.WriteRune(edgeMapper(sobelProv, x, y))
 			} else {
+
 				if prevWasBold {
 					prevWasBold = false
 					asciiBuilder.WriteString("\x1b[22m") // Reset bold
@@ -858,6 +863,7 @@ func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv SobelProvider, aspect_ratio
 		asciiBuilder.WriteRune('\n')
 	}
 
+	// Reset all styles
 	asciiBuilder.WriteString("\x1b[0m")
 	
 	return asciiBuilder.String()
