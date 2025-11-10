@@ -105,6 +105,8 @@ func (d downscalingModes) IgnoreAspectRatio() DownscalingMode {
 type AsciiConverter struct {
 	// SobelMagnitudeThreshold provides the gMag2 value threshold before an edge is registered as an edge. This field only has an effect if UseSobel is true.
 	SobelMagnitudeThreshold				float64
+
+	SobelLaplacianThreshold				float64
 	
 	// LaplacianMagnitudeThreshold provides the maximum laplacian value for an edge to be considered an edge.
 	LaplacianMagnitudeThreshold			int
@@ -214,20 +216,16 @@ type defaultSobelProvider struct {
 	LuminosityProvider
 	G_Grad		[]float64
 	G_Mag2		[]int
-	G_Laplacian	[]int
+	G_Laplacian	[]float64
 }
 
-func makeDefaultSobelProvider(lumProvider LuminosityProvider, gGrad []float64, gMag2 []int, gLap []int) defaultSobelProvider {
+func makeDefaultSobelProvider(lumProvider LuminosityProvider, gGrad []float64, gMag2 []int, gLap []float64) defaultSobelProvider {
 	return defaultSobelProvider{
 		LuminosityProvider: lumProvider,
 		G_Grad: gGrad,
 		G_Mag2: gMag2,
 		G_Laplacian: gLap,
 	}
-}
-
-func (d defaultSobelProvider) SobelEdgeDetected(x, y int, threshold int) bool {
-	return d.SobelMag2At(x, y) >= threshold
 }
 
 func (d defaultSobelProvider) SobelGradAt1D(idx int) float64 {
@@ -242,11 +240,11 @@ func (d defaultSobelProvider) SobelMag2At1D(idx int) int {
 	return d.G_Mag2[idx]
 }
 
-func (d defaultSobelProvider) SobelLaplacianAt(x, y int) int {
+func (d defaultSobelProvider) SobelLaplacianAt(x, y int) float64 {
 	return d.G_Laplacian[x + y * d.Width()]
 }
 
-func (d defaultSobelProvider) SobelLaplacianAt1D(idx int) int {
+func (d defaultSobelProvider) SobelLaplacianAt1D(idx int) float64 {
 	return d.G_Laplacian[idx]
 }
 
@@ -279,13 +277,12 @@ SobelProvider is the interface that stores and provides sobel data per character
 type SobelProvider interface {
 	image.Image
 	LuminosityProvider
-	SobelEdgeDetected(int, int, int) bool
 	SobelGradAt1D(int) float64
 	SobelGradAt(int, int) float64
 	SobelMag2At1D(int) int
 	SobelMag2At(int, int) int
-	SobelLaplacianAt(int, int) int
-	SobelLaplacianAt1D(int) int
+	SobelLaplacianAt(int, int) float64
+	SobelLaplacianAt1D(int) float64
 }
 
 /*
@@ -825,7 +822,7 @@ func computeGrad(x float64, y float64) float64 {
 	}
 }
 
-func applySobelCentralPixel(lumImg LuminosityProvider, gGrad []float64, gMag2 []int, gLap []int, x, y int) {
+func applySobelCentralPixel(lumImg LuminosityProvider, gGrad []float64, gMag2 []int, gLap []float64, x, y int) {
 	idx := x + y * lumImg.Width()
 
 	gx := -1 * lumImg.LuminosityAt(x-1,y-1) +
@@ -850,16 +847,18 @@ func applySobelCentralPixel(lumImg LuminosityProvider, gGrad []float64, gMag2 []
 	// Instead during lum->char translations, we will multiply the grad thresholds by dY/dX to be more efficient
 	gGrad[idx] = computeGrad(float64(gx), float64(gy))
 
-	l := +1 * lumImg.LuminosityAt(x, y-1) +
-		+1 * lumImg.LuminosityAt(x-1,y) + 
-		-4 * lumImg.LuminosityAt(x,y) +
-		+1 * lumImg.LuminosityAt(x+1,y) +
-		+1 * lumImg.LuminosityAt(x,y+1)
+	invAspectRatio := lumImg.Height() / lumImg.Width()
 
-	gLap[idx] = l
+	l := +(invAspectRatio) * lumImg.LuminosityAt(x, y-1) +
+		+1 * lumImg.LuminosityAt(x-1,y) + 
+		-2 * (2 + 1 * invAspectRatio) * lumImg.LuminosityAt(x,y) +
+		+1 * lumImg.LuminosityAt(x+1,y) +
+		+(invAspectRatio) * lumImg.LuminosityAt(x,y+1)
+
+	gLap[idx] = float64(l)
 }
 
-func applySobelPixelSafely(lumImg LuminosityProvider, gGrad []float64, gMag2 []int, gLap []int, x, y int) {
+func applySobelPixelSafely(lumImg LuminosityProvider, gGrad []float64, gMag2 []int, gLap []float64, x, y int) {
 	gx := -1 * lumImg.SafeLuminosityAt(x-1,y-1) +
 	+1 * lumImg.SafeLuminosityAt(x+1,y-1) +
 	-2 * lumImg.SafeLuminosityAt(x-1,y) +
@@ -883,13 +882,15 @@ func applySobelPixelSafely(lumImg LuminosityProvider, gGrad []float64, gMag2 []i
 	// Instead during lum->char translations, we will multiply the grad thresholds by dY/dX to be more efficient
 	gGrad[idx] = computeGrad(float64(gx), float64(gy))
 
-	l := +1 * lumImg.SafeLuminosityAt(x, y-1) +
-		+1 * lumImg.SafeLuminosityAt(x-1,y) + 
-		-4 * lumImg.SafeLuminosityAt(x,y) +
-		+1 * lumImg.SafeLuminosityAt(x+1,y) +
-		+1 * lumImg.SafeLuminosityAt(x,y+1)
+	invAspectRatio := lumImg.Height() / lumImg.Width()
 
-	gLap[idx] = l
+	l := +(invAspectRatio) * lumImg.SafeLuminosityAt(x, y-1) +
+		+1 * lumImg.SafeLuminosityAt(x-1,y) + 
+		-2 * (2 + 1 * invAspectRatio) * lumImg.SafeLuminosityAt(x,y) +
+		+1 * lumImg.SafeLuminosityAt(x+1,y) +
+		+(invAspectRatio) * lumImg.SafeLuminosityAt(x,y+1)
+
+	gLap[idx] = float64(l)
 }
 
 /*
@@ -902,7 +903,7 @@ func (a *AsciiConverter) ApplySobel(lumImg LuminosityProvider) defaultSobelProvi
 	gLen := gWidth * gHeight
 	gMag2 := make([]int, gLen)
 	gGrad := make([]float64, gLen)
-	gLap := make([]int, gLen)
+	gLap := make([]float64, gLen)
 
 	// Calculate G
 	for y := 1; y < gHeight - 1; y++ {
@@ -963,7 +964,8 @@ func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv SobelProvider, aspect_ratio
 				asciiBuilder.WriteString(escapeStr)
 			}
 
-			if sobelProv.SobelMag2At(x, y) >= adjustedGMag2Threshold {
+			if sobelProv.SobelMag2At(x, y) >= adjustedGMag2Threshold &&
+				sobelProv.SobelLaplacianAt(x, y) <= a.SobelLaplacianThreshold {
 				// if code != prevColor {
 					// prevColor = (0 >> 16) | (0 >> 8) | 255
 //
