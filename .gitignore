@@ -1,2 +1,4 @@
 # out directory
 .asciiart_out
+
+dist/
