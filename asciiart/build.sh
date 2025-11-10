@@ -1,7 +1,7 @@
 #!/bin/bash
 set -e
 
-mkdir -p dist
+mkdir -p ../dist
 
 for os in linux windows darwin; do
   for arch in amd64 arm64; do
