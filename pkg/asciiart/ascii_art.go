@@ -553,10 +553,12 @@ func (a *AsciiConverter) DownscaleImage(src image.Image, targetWidth, targetHeig
 			if a.OutputAspectRatio >= 1 {
 				// aspect ratio >= 1, so downscale directly to the width, then scale height accordingly
 				newWidth = targetWidth
-				newHeight = int(float64(targetWidth) / a.OutputAspectRatio)
+				invImageAspectRatio := float64(srcHeight) / float64(srcWidth)
+				newHeight = int(float64(targetWidth) * invImageAspectRatio / a.OutputAspectRatio)
 			} else {
 				// aspect ratio < 1, so downscale directly to the height, then scale width accordingly
-				newWidth = int(float64(targetHeight) * a.OutputAspectRatio)
+				imageAspectRatio := float64(srcWidth) / float64(srcHeight)
+				newWidth = int(float64(targetHeight) * imageAspectRatio * a.OutputAspectRatio)
 				newHeight = targetHeight
 			}
 		case DownscalingModes.IgnoreAspectRatio():
