@@ -662,6 +662,8 @@ func applySobelCentralPixel(lumImg LuminosityProvider, gGrad []float64, gMag2 []
 
 	|G|^2 = gx * gx + gy * gy
 
+	This value does not account for aspect ratio. Instead of scaling by the magnitude by the aspect ratio, we will scale the threshold by aspect ratio^2 an estimate.
+
 	<-- Gradient -->
 
 	Sobel gradient represents the direction in which the change in brightness happened.
@@ -672,9 +674,25 @@ func applySobelCentralPixel(lumImg LuminosityProvider, gGrad []float64, gMag2 []
 
 	grad = gy/gx
 
-	<-- Sobel Laplacian (Second Derivative) -->
+	This value does not account for aspect ratio. Instead of scaling the gradient by the aspect ratio, we will inversely scale the stops (thresholds) by 1/aspect_ratio
 
-	See https://en.wikipedia.org/wiki/Sobel_operator for more information
+	<-- Laplacian -->
+
+	The purpose of laplacian is to finding true edge location. The laplacian is sensitive to rapid intensity bends. For our purposes, it helps mitigate doubled edges from edge detection. i.e. we use sobel to figure out the edge direction and strength, and we use laplacian to find the true origin of the edge.
+
+			|  0 +1  0 |
+	L =		| +1 -2 +1 |
+			|  0 +1  0 |
+
+	However, this doesn't take into account the aspect ratio. Unlike the sobel operations, we will just normalize the value in place by using this kernel instead
+
+			|  0	 1/aspect_ratio^2     0 |
+	L =		| +1 -(2 + 1/aspect_ratio^2) +1 |
+			|  0     1/aspect_ratio^2     0 |
+
+	Probably, we could optimise this better. For now it works great.
+
+	See https://en.wikipedia.org/wiki/Sobel_operator for more information about sobel operator
 	*/
 
 	idx := x + y * lumImg.Width()
