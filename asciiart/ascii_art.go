@@ -445,26 +445,28 @@ func DefaultEdgeMapperFactory(aspect_ratio float64) func(SobelProvider, int, int
 
 	idxOffset := int(minGrad * precision / aspect_ratio) // The amount we have to shift the idx to get the gradient
 	currStop := 0
-	// count := 0
 	for i := range glyphStops {
 		thresh := stops[currStop].float64 * precision / aspect_ratio
 		for float64(i + idxOffset) > thresh {
-			// fmt.Println("Got", count, stops[currStop].rune)
-			// count = 0
-
-			// fmt.Println("skipping", string(stops[currStop].rune), "with inferred grad", float64(i - idxOffset), "comparing with expected", stops[currStop].float64)
-
 			currStop++
 			thresh = stops[currStop].float64 * precision / aspect_ratio
 		}
 
-		// count++
 		glyphStops[i] = stops[currStop].rune
 	}
 
-	// fmt.Println(string(glyphStops))
+	// TODO: Make these thresholds configurable
+	const lumThresh = 10
+	const alphaThresh = 30
 
 	return func(sobelProv SobelProvider, x, y int) rune {
+		_, _, _, a := sobelProv.At(x, y).RGBA()
+		a8 := a >> 8
+		if sobelProv.LuminosityAt(x, y) <= lumThresh || a8 <= alphaThresh {
+			// Don't map to edge if the luminosity is too low
+			return ' '
+		}
+
 		grad := sobelProv.SobelGradAt(x, y)
 		gradIdx := min(glyphStopsLen - 1, max(0, int(grad * precision) - idxOffset))
 		// fmt.Println("Got gradient", grad, (grad * aspect_ratio),  "=", gradIdx, string(glyphStops[gradIdx]))
