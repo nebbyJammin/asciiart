@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/nebbyJammin/asciiart"
+	"github.com/nebbyJammin/asciiart/pkg/asciiart"
 	utils "github.com/nebbyJammin/asciiart/cmd/internal/cmd_utils"
 )
 
@@ -11,8 +11,7 @@ func main() {
 	ascii := asciiart.New(
 		// asciiart.WithAlwaysDownscaleToTarget(true), // Downscaling before to target size
 		asciiart.WithSobel(false), // Not using sobel
-		asciiart.WithColor(true), // Color
-		asciiart.WithDefault8BitColorMapper(), // Use 8 bit color mapping
+		asciiart.WithColor(false), // Not using color
 	)
 
 	err := utils.ConvertImages(ascii)
@@ -20,5 +19,3 @@ func main() {
 		fmt.Println(err)
 	}
 }
-
-

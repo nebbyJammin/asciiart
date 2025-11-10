@@ -7,7 +7,7 @@ import (
 	"path/filepath"
 	"time"
 
-	"github.com/nebbyJammin/asciiart"
+	"github.com/nebbyJammin/asciiart/pkg/asciiart"
 )
 
 const (

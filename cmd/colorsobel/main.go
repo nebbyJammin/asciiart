@@ -3,7 +3,7 @@ package main
 import (
 	"fmt"
 
-	"github.com/nebbyJammin/asciiart"
+	"github.com/nebbyJammin/asciiart/pkg/asciiart"
 	utils "github.com/nebbyJammin/asciiart/cmd/internal/cmd_utils"
 )
 

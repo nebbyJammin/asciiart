@@ -6,7 +6,7 @@ import (
 	"fmt"
 	"os"
 
-	"github.com/nebbyJammin/asciiart"
+	"github.com/nebbyJammin/asciiart/pkg/asciiart"
 )
 
 const (
