@@ -537,12 +537,6 @@ That will signal the function to always downscale to the target resolution
 Returns the downscaled image, and the effective aspect ratio. The effective aspect ratio is should be roughly equal to the original aspect ratio, but may differ because of integer clamping. Use the effective aspect ratio to adjust Sobel thresholds or gradient correction, since the sampling grid may differ slightly from OutputAspectRatio due to integer rounding.
 */
 func (a *AsciiConverter) DownscaleImage(src image.Image, targetWidth, targetHeight int) (image.Image, float64) {
-
-	// Check if we need to do anything
-	if a.OutputAspectRatio == 1 && a.DownscalingMode == DownscalingModes.WithRespectToAspectRatio() {
-		return src, a.OutputAspectRatio
-	}
-
 	var newWidth, newHeight int
 	srcBounds := src.Bounds()
 	srcWidth, srcHeight := srcBounds.Dx(), srcBounds.Dy()
@@ -552,7 +546,7 @@ func (a *AsciiConverter) DownscaleImage(src image.Image, targetWidth, targetHeig
 	// NOTE: We will never upscale width or height. Instead, downscale the opposing axis.
 	switch a.DownscalingMode {
 		case DownscalingModes.WithRespectToAspectRatio():
-			if a.OutputAspectRatio >= 1 {
+			if imageAspectRatio >= 1 {
 				// aspect ratio >= 1, so downscale directly to the width, then scale height accordingly
 
 				maxTargetWidth := int(float64(srcHeight) * imageAspectRatio) // Calculate the width if we were respecting aspect ratio with the height first
@@ -562,11 +556,16 @@ func (a *AsciiConverter) DownscaleImage(src image.Image, targetWidth, targetHeig
 				// aspect ratio < 1, so downscale directly to the height, then scale width accordingly
 				maxTargetHeight := int(float64(srcWidth) * invImageAspectRatio) // Calculate the height if we were respecting aspect ratio with the width first
 				newHeight = min(maxTargetHeight, min(targetHeight, srcHeight)) // targetHeight must be less than the source height and less than the maxTarget height calculated before
-				newWidth = int(float64(targetHeight) * imageAspectRatio * a.OutputAspectRatio)
+				newWidth = int(float64(newHeight) * imageAspectRatio * a.OutputAspectRatio)
 			}
 		case DownscalingModes.IgnoreAspectRatio():
-			newWidth = min(targetWidth, srcWidth)
-			newHeight = min(targetHeight, srcHeight)
+			if a.OutputAspectRatio >= 1 {
+				newWidth = min(targetWidth, srcWidth)
+				newHeight = int(float64(min(targetHeight, srcHeight)) / a.OutputAspectRatio)
+			} else {
+				newWidth = int(float64(min(targetWidth, srcWidth)) / a.OutputAspectRatio)
+				newHeight = min(targetHeight, srcHeight)
+			}
 		default:
 			msg := fmt.Sprintf("Unknown downscaling mode provided: %d", a.DownscalingMode)
 			panic(msg)
@@ -914,7 +913,6 @@ To ignore this behaviour and always convert to target width and height, specify 
 func (a *AsciiConverter) Convert(img image.Image, targetWidth, targetHeight int) string {
 	var effectiveAspectRatio float64
 	img, effectiveAspectRatio = a.DownscaleImage(img, targetWidth, targetHeight)
-	fmt.Println(img.Bounds())
 	lumImg := a.MapLuminosity(img)
 
 	if a.UseSobel {
