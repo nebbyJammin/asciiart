@@ -26,8 +26,6 @@ See [documentation](https://pkg.go.dev/github.com/nebbyJammin/asciiart/pkg/ascii
 To start, you may do:
 
 ```go
-import "github.com/nebbyJammin/asciiart/pkg/asciiart"
-
 api := asciiart.New()
 ```
 
