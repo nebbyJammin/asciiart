@@ -18,6 +18,7 @@ const (
 						  `    - "ignore-aspect-ratio"` + "\n"
 	aspectUsage			= "Specifies the output aspect ratio to use. Use the inverse of the aspect ratio of the terminal character you are targetting (usually the output aspect ratio will approximately be 2:1 = 2)."
 	colorSpaceUsage		= "Specifies the color space to use:\n" +
+							`  - "none" | "0bit" | "0" | "grey" | "greyscale" | "gray" | "grayscale"` + "\n" +
 							`  - "3bit" | "3"` + "\n" +
 							`  - "4bit" | "4"` + "\n" +
 							`  - "8bit" | "8"` + "\n" +
@@ -101,7 +102,7 @@ func main() {
 	var colorMapperOpt asciiart.AsciiOption
 
 	switch colorSpace {
-	case "none", "0", "grey", "greyscale":
+	case "none", "0", "0bit", "grey", "greyscale", "gray", "grayscale":
 		colorMapperOpt = asciiart.WithNoColorMapper()
 	case "3bit", "3":
 		colorMapperOpt = asciiart.WithDefault3BitColorMapper()
