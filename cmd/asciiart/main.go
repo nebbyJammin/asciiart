@@ -29,7 +29,6 @@ const (
 )
 
 func main() {
-	useColor := false
 	useSobel := false
 	useBoldOutline := true
 	downscalingModeStr := "respect-aspect-ratio"
@@ -37,11 +36,6 @@ func main() {
 	colorSpace := "4bit"
 	width := 100
 	height := 100
-
-	enableColor := func(s string) error {
-		useColor = true	
-		return nil
-	}
 
 	enableSobel := func(s string) error {
 		useSobel = true
@@ -60,16 +54,10 @@ func main() {
 		if err := enableSobel(s); err != nil {
 			return err
 		}
-		if err := enableColor(s); err != nil {
-			return err
-		}
 		colorSpace = "24bit"
 		
 		return nil
 	}
-
-	flag.BoolFunc("c", colorUsage, enableColor)
-	flag.BoolFunc("color", "alias for -c", enableColor)
 
 	flag.BoolFunc("s", sobelUsage, enableSobel)
 	flag.BoolFunc("sobel", "alias for -s", enableSobel)
@@ -87,8 +75,8 @@ func main() {
 
 	flag.StringVar(&downscalingModeStr, "downscale-mode", "respect-aspect-ratio", downscalingUsage)
 
-	flag.StringVar(&colorSpace, "cspace", "4bit", colorSpaceUsage)
-	flag.StringVar(&colorSpace, "color-space", "4bit", "alias for -cspace")
+	flag.StringVar(&colorSpace, "cspace", "none", colorSpaceUsage)
+	flag.StringVar(&colorSpace, "color-space", "none", "alias for -cspace")
 
 	flag.BoolFunc("rich", richUsage, enableRich)
 	flag.BoolFunc("r", richUsage, enableRich)
@@ -113,6 +101,8 @@ func main() {
 	var colorMapperOpt asciiart.AsciiOption
 
 	switch colorSpace {
+	case "none", "0", "grey", "greyscale":
+		colorMapperOpt = asciiart.WithNoColorMapper()
 	case "3bit", "3":
 		colorMapperOpt = asciiart.WithDefault3BitColorMapper()
 	case "4bit", "4":
@@ -132,7 +122,6 @@ func main() {
 		asciiart.WithBoldedSobelOutline(useBoldOutline),
 		asciiart.WithOutputAspectRatio(aspectRatio),
 		asciiart.WithDownscalingMode(dMode),
-		asciiart.WithColor(useColor),
 		asciiart.WithSobel(useSobel),
 		asciiart.WithDefaultLumosityMapper(),
 		asciiart.WithDefaultEdgeMapperFactory(),

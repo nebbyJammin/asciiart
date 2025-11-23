@@ -18,23 +18,18 @@ func WithDownscalingMode(mode DownscalingMode) AsciiOption {
 	}
 }
 
+func WithNoColorMapper() AsciiOption {
+	return func(a *AsciiConverter) {
+		a.ANSIColorMapper = NoColorMapper
+	}
+}
+
 /*
 WithSobel enables/disables sobel edge detection. In general, use sobel edge detection only when the target size is big enough (approx >=100x100). Generally, with low resolution, sobel edge detection cannot reliably detect edges without looking noisy.
 */
 func WithSobel(useSobel bool) AsciiOption {
 	return func(a *AsciiConverter) {
 		a.UseSobel = useSobel
-	}
-}
-
-/*
-WithColor enables/disables color. Use this in combination with the color mapper. 
-
-NOTE: Ensure that your terminal supports the color space of each color mapper. This library implements some default mappers for most standard ANSI color escape sequences (3bit, 4bit, 8bit and 24bit color space).
-*/
-func WithColor(useColor bool) AsciiOption {
-	return func(a *AsciiConverter) {
-		a.UseColor = useColor
 	}
 }
 

@@ -122,9 +122,6 @@ type AsciiConverter struct {
 
 	// UseSobel flags to the converter whether or not sobel edge detection should be used.
 	UseSobel										bool
-	
-	// UseColor flags to the converter whether terminal escape sequences used to indicate colour should be used
-	UseColor										bool
 	// The function that converts a luminence value (0-255) to a rune
 	LuminosityMapper									func(lumProv LuminosityProvider, x, y int) rune
 	// The function that converts an approximate gradient to a rune
@@ -309,17 +306,15 @@ NewDefault initializes an asciiart instance with default parameters.
 */
 func NewDefault() *AsciiConverter {
 	return &AsciiConverter {
-		SobelMagnitudeSqThresholdNormalized: 80000,
-		SobelLaplacianThresholdNormalized: 300,
+		SobelMagnitudeSqThresholdNormalized: 10000,
+		SobelLaplacianThresholdNormalized: 500,
 		SobelOutlineIsBold: true,
 		OutputAspectRatio: 2,
 		DownscalingMode: DownscalingModes.WithRespectToAspectRatio(),
-		UseColor: true,
 		UseSobel: true,
 		LuminosityMapper: DefaultLuminenceMapper,
 		EdgeMapperFactory: DefaultEdgeMapperFactory,
-		// ANSIColorMapper: defaultColorMapper(),
-		ANSIColorMapper: Default4BitColorMapper(),
+		ANSIColorMapper: defaultColorMapper(),
 		BytesPerCharToReserve: bytesPerCharReserve,
 		AdditionalBytesPerCharColor: ansiAdditionalBytesReserved3Bit,
 	}
@@ -340,7 +335,11 @@ func New(opts ...AsciiOption) *AsciiConverter {
 defaultColorMapper provides the default configuration for the 3 bit color mapper provided by this library. 99% of terminals should support at least 3 bit color space.
 */
 func defaultColorMapper() func(LuminosityProvider, int, int) (int, string) {
-	return Default3BitColorMapper()
+	return NoColorMapper
+}
+
+func NoColorMapper(LuminosityProvider, int, int) (int, string) {
+	return 0, ""
 }
 
 var default3BitOpts = ColorMapper3BitOptions {
@@ -803,13 +802,9 @@ func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv SobelProvider, aspect_ratio
 	edgeMapper := a.EdgeMapperFactory(aspect_ratio)
 
 	var bufferSize int
-	if a.UseColor {
-		// In most cases, we will overallocate by a few hundred bytes to ensure there is no reallocation of the buffer
-		// This is because it cannot be known how much room should be left for the colour ANSI escape sequences
-		bufferSize = int((bytesPerCharReserve + ansiAdditionalBytesReserved3Bit) * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line byte
-	} else {
-		bufferSize = int(bytesPerCharReserve * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line
-	}
+	// In most cases, we will overallocate by a few hundred bytes to ensure there is no reallocation of the buffer
+	// This is because it cannot be known how much room should be left for the colour ANSI escape sequences
+	bufferSize = int((a.BytesPerCharToReserve + a.AdditionalBytesPerCharColor) * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line byte
 
 	var asciiBuilder strings.Builder
 	asciiBuilder.Grow(bufferSize)
@@ -823,13 +818,11 @@ func (a *AsciiConverter) ASCIIGenWithSobel(sobelProv SobelProvider, aspect_ratio
 
 	for y := range height {
 		for x := range width {
-			if a.UseColor {
-				code, escapeStr = a.ANSIColorMapper(sobelProv, x, y)
-				if code != prevCode {
-					prevCode = code
+			code, escapeStr = a.ANSIColorMapper(sobelProv, x, y)
+			if code != prevCode {
+				prevCode = code
 
-					asciiBuilder.WriteString(escapeStr)
-				}
+				asciiBuilder.WriteString(escapeStr)
 			}
 
 			// Check if we should use the edge or the luminosity mapper
@@ -868,13 +861,9 @@ func (a *AsciiConverter) ASCIIGen(lumProv LuminosityProvider, aspect_ratio float
 	width, height := lumProv.Width(), lumProv.Height()
 
 	var bufferSize int
-	if a.UseColor {
-		// In most cases, we will overallocate by a few hundred bytes to ensure there is no reallocation of the buffer
-		// This is because it cannot be known how much room should be left for the colour ANSI escape sequences
-		bufferSize = int((a.BytesPerCharToReserve + a.AdditionalBytesPerCharColor) * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line byte
-	} else {
-		bufferSize = int(a.BytesPerCharToReserve * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line
-	}
+	// In most cases, we will overallocate by a few hundred bytes to ensure there is no reallocation of the buffer
+	// This is because it cannot be known how much room should be left for the colour ANSI escape sequences
+	bufferSize = int((a.BytesPerCharToReserve + a.AdditionalBytesPerCharColor) * float64(width + 1) * float64(height)) // width + 1 because leave a byte for the new line byte
 
 	var asciiBuilder strings.Builder
 	asciiBuilder.Grow(bufferSize)
@@ -883,13 +872,11 @@ func (a *AsciiConverter) ASCIIGen(lumProv LuminosityProvider, aspect_ratio float
 
 	for y := range height {
 		for x := range width {
-			if a.UseColor {
-				code, escapeStr := a.ANSIColorMapper(lumProv, x, y)
-				if code != prevColor {
-					prevColor = code
+			code, escapeStr := a.ANSIColorMapper(lumProv, x, y)
+			if code != prevColor {
+				prevColor = code
 
-					asciiBuilder.WriteString(escapeStr)
-				}
+				asciiBuilder.WriteString(escapeStr)
 			}
 
 			asciiBuilder.WriteRune(a.LuminosityMapper(lumProv, x, y))
