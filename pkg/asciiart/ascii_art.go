@@ -287,22 +287,19 @@ type SobelProvider interface {
 }
 
 /*
-NewDefault initializes an asciiart instance with default parameters.
-
-- SobelMagnitudeThresholdNormalized: 80000
-- SobelLaplacianThresholdNormalized: 300
-- SobelOutlineIsBold: true
-- OutputAspectRatio: 2
-- DownscalingMode: DownscalingModes.WithRespectToAspectRatio() [0]
-- UseColor: true
-- UseSobel: true
-- LuminenceMapper: <default internal luminence mapper>
-- EdgeMapperFactor: <default internal edge mapper factory>
-- ANSIColorMapper: <default internal 4 bit color mapper>:
-	- NOTE: You can choose which color mapper to choose from with asciioption:
-		- 3bit, 4bit, 8bit, 24bit
-- BytesPerCharToReserve: 3.5
-- AdditionalBytesPerCharColor: 2
+NewDefault initializes an asciiart instance with default parameters:
+	- SobelMagnitudeThresholdNormalized: 80000
+	- SobelLaplacianThresholdNormalized: 300
+	- SobelOutlineIsBold: true
+	- OutputAspectRatio: 2
+	- DownscalingMode: DownscalingModes.WithRespectToAspectRatio() [0]
+	- UseColor: true
+	- UseSobel: true
+	- LuminenceMapper: <default internal luminence mapper>
+	- EdgeMapperFactor: <default internal edge mapper factory>	
+	- ANSIColorMapper: <default internal 4 bit color mapper>:
+	- BytesPerCharToReserve: 3.5
+	- AdditionalBytesPerCharColor: 2
 */
 func NewDefault() *AsciiConverter {
 	return &AsciiConverter {
@@ -476,17 +473,17 @@ func DefaultEdgeMapperFactory(aspect_ratio float64) func(SobelProvider, int, int
 /*
 ConvertReader takes an io.Reader that can read the bytes of an image. Image formats supported are jpeg, png, gif. If you want to support more formats, initialize the decoder package at the top of any of your go files:
 
-import (
-	... <other imports>
+	import (
+		... <other imports>
 
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
+		_ "image/gif"
+		_ "image/jpeg"
+		_ "image/png"
 
-	...
-)
+		...
+	)
 
-ConvertReader uses image.Decode() under the hood, so it is important to register file formats so the image module knows how to decode the bytes.
+ConvertReader uses `image.Decode()` under the hood, so it is important to register file formats so the image module knows how to decode the bytes.
 */
 func (a *AsciiConverter) ConvertReader(r io.Reader, targetWidth, targetHeight int) (string, error) {
 	img, _, err := image.Decode(r)
@@ -500,18 +497,18 @@ func (a *AsciiConverter) ConvertReader(r io.Reader, targetWidth, targetHeight in
 /*
 ConvertBytes takes a byte slice representing an image. Image formats supported are jpeg, png, gif. If you want to support more formats, initialize the decoder package at the top of any of your go files:
 
-import (
-	... <other imports>
+	import (
+		... <other imports>
 
-	_ "image/gif"
-	_ "image/jpeg"
-	_ "image/png"
-	_ "mycustomdecoder/mycustomformat" // Here is your custom file format
-	
-	...
-)
+		_ "image/gif"
+		_ "image/jpeg"
+		_ "image/png"
+		_ "mycustomdecoder/mycustomformat" // Here is your custom file format
+		
+		...
+	)
 
-ConvertBytes calls ConvertReader() under the hood which uses image.Decode(), so it is important to register file formats so the image module knows how to decode the bytes.
+ConvertBytes calls `ConvertReader()` under the hood which uses `image.Decode()`, so it is important to register file formats so the image module knows how to decode the bytes.
 */
 func (a *AsciiConverter) ConvertBytes(b []byte, targetWidth, targetHeight int) (string, error) {
 	return a.ConvertReader(bytes.NewReader(b), targetWidth, targetHeight)
