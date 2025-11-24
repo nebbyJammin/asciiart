@@ -423,7 +423,7 @@ func DefaultEdgeMapperFactory(aspect_ratio float64) func(SobelProvider, int, int
 	const maxGrad = float64(60.5)
 
 	stops := [...]edgeGlyphStop{
-		{rune: '=', float64: math.Nextafter(-6, math.Inf(-1))},		// (-inf, -7)
+		{rune: '=', float64: math.Nextafter(-7, math.Inf(-1))},		// (-inf, -7)
 		{rune: '\\', float64: math.Nextafter(-2, math.Inf(-1))},		// [-7, -5)
 		{rune: 'l', float64: math.Nextafter(-1, math.Inf(-1))},		// [-5, -3)
 		{rune: 'L', float64: math.Nextafter(-0.5, math.Inf(-1))},	// [-3, -0.5)
